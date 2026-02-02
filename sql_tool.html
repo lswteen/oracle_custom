@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+    <meta charset="UTF-8">
+    <title>SQL Extractor</title>
+    <style>
+        :root {
+            --p: #6366f1;
+            --bg: #0f172a;
+            --fg: #f8fafc;
+            --b: rgba(255, 255, 255, 0.1);
+        }
+
+        body {
+            font-family: sans-serif;
+            background: var(--bg);
+            color: var(--fg);
+            margin: 0;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        header {
+            padding: 10px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--b);
+        }
+
+        .panels {
+            display: flex;
+            flex: 1;
+            min-height: 0;
+        }
+
+        .panel {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            border-right: 1px solid var(--b);
+        }
+
+        h2 {
+            font-size: 14px;
+            padding: 10px;
+            margin: 0;
+            background: rgba(255, 255, 255, 0.05);
+            color: #94a3b8;
+        }
+
+        textarea,
+        pre {
+            flex: 1;
+            width: 100%;
+            border: none;
+            padding: 15px;
+            background: transparent;
+            color: inherit;
+            font-family: monospace;
+            font-size: 13px;
+            outline: none;
+            resize: none;
+            overflow: auto;
+            box-sizing: border-box;
+        }
+
+        pre {
+            color: #a5b4fc;
+            white-space: pre-wrap;
+            margin: 0;
+        }
+
+        .btn {
+            padding: 5px 15px;
+            background: var(--p);
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+
+<body>
+    <header>
+        <strong>SQL Extractor (Oracle)</strong>
+        <button onclick="copySql()" class="btn">SQL 복사</button>
+    </header>
+    <div class="panels">
+        <div class="panel">
+            <h2>EXTRACTED QUERY (RESULT)</h2>
+            <pre id="out"><code></code></pre>
+        </div>
+        <div class="panel">
+            <h2>JAVA SOURCE (INPUT)</h2>
+            <textarea id="inp" placeholder="Java 코드를 붙여넣으세요..."></textarea>
+        </div>
+    </div>
+    <script>
+        const inp = document.getElementById('inp');
+        const out = document.getElementById('out').children[0];
+
+        const extract = (code) => {
+            if (!code) return '';
+            // 1. Remove Java Comments
+            let live = code.replace(/\/\*[\s\S]*?\*\//g, "");
+            live = live.split('\n').map(line => {
+                let q = false, s = "";
+                for (let i = 0; i < line.length; i++) {
+                    if (line[i] === '"' && (i === 0 || line[i - 1] !== '\\')) q = !q;
+                    if (!q && line[i] === '/' && line[i + 1] === '/') break;
+                    s += line[i];
+                }
+                return s;
+            }).join('\n');
+
+            // 2. Extract .append("...")
+            const regex = /\.append\s*\(\s*"(.*?)"\s*\)/gs;
+            let m, res = [];
+            while ((m = regex.exec(live)) !== null) {
+                res.push(m[1].replace(/\\"/g, '"').replace(/\\n/g, '\n').replace(/\\t/g, '\t'));
+            }
+
+            // 3. Fallback to simple quotes if no append found
+            if (res.length === 0) {
+                const sRegex = /"(.*?)"/g;
+                while ((m = sRegex.exec(live)) !== null) {
+                    if (m[1].trim().length > 3) res.push(m[1].replace(/\\"/g, '"'));
+                }
+            }
+            return res.map(l => l.trimEnd()).join('\n').trim();
+        };
+
+        inp.addEventListener('input', () => { out.textContent = extract(inp.value); });
+
+        function copySql() {
+            navigator.clipboard.writeText(out.textContent).then(() => alert('복사되었습니다.'));
+        }
+    </script>
+</body>
+
+</html>
