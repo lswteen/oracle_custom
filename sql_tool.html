@@ -3,7 +3,7 @@
 
 <head>
     <meta charset="UTF-8">
-    <title>SQL Extractor</title>
+    <title>SQL Extractor Pro (4-Area)</title>
     <style>
         :root {
             --p: #6366f1;
@@ -20,6 +20,7 @@
             height: 100vh;
             display: flex;
             flex-direction: column;
+            overflow: hidden;
         }
 
         header {
@@ -28,116 +29,252 @@
             justify-content: space-between;
             align-items: center;
             border-bottom: 1px solid var(--b);
+            background: rgba(0, 0, 0, 0.2);
         }
 
-        .panels {
-            display: flex;
+        .main-container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            grid-template-rows: 1fr 1fr;
             flex: 1;
             min-height: 0;
+            gap: 2px;
+            background: var(--b);
         }
 
-        .panel {
-            flex: 1;
+        .area {
             display: flex;
             flex-direction: column;
-            border-right: 1px solid var(--b);
+            background: var(--bg);
+            position: relative;
         }
 
         h2 {
-            font-size: 14px;
-            padding: 10px;
+            font-size: 11px;
+            padding: 6px 10px;
             margin: 0;
             background: rgba(255, 255, 255, 0.05);
             color: #94a3b8;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
         }
 
-        textarea,
-        pre {
+        textarea {
             flex: 1;
             width: 100%;
             border: none;
-            padding: 15px;
+            padding: 12px;
             background: transparent;
             color: inherit;
-            font-family: monospace;
-            font-size: 13px;
+            font-family: 'Fira Code', monospace;
+            font-size: 12px;
             outline: none;
             resize: none;
-            overflow: auto;
             box-sizing: border-box;
         }
 
-        pre {
-            color: #a5b4fc;
-            white-space: pre-wrap;
-            margin: 0;
-        }
-
-        .btn {
-            padding: 5px 15px;
+        .btn-sm {
+            padding: 2px 8px;
+            font-size: 10px;
             background: var(--p);
             color: white;
             border: none;
-            border-radius: 4px;
+            border-radius: 3px;
             cursor: pointer;
+        }
+
+        .badge {
+            font-weight: bold;
+            color: var(--p);
+            margin-right: 5px;
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 3px;
         }
     </style>
 </head>
 
 <body>
     <header>
-        <strong>SQL Extractor (Oracle)</strong>
-        <button onclick="copySql()" class="btn">SQL 복사</button>
-    </header>
-    <div class="panels">
-        <div class="panel">
-            <h2>EXTRACTED QUERY (RESULT)</h2>
-            <pre id="out"><code></code></pre>
+        <strong>⚡ SQL Extractor Dashboard</strong>
+        <div>
+            <button onclick="loadSample()" class="btn-sm" style="background:#475569">샘플 로드</button>
+            <button onclick="processFinal()" class="btn-sm" style="margin-left:5px">최종 결과 생성</button>
         </div>
-        <div class="panel">
-            <h2>JAVA SOURCE (INPUT)</h2>
-            <textarea id="inp" placeholder="Java 코드를 붙여넣으세요..."></textarea>
+    </header>
+    <div class="main-container">
+        <!-- 1. Input Area -->
+        <div class="area">
+            <h2><span><span class="badge">1</span> JAVA SOURCE (INPUT)</span></h2>
+            <textarea id="inputArea" placeholder="Java 소스를 여기에..."></textarea>
+        </div>
+        <!-- 2. First Extraction Area -->
+        <div class="area">
+            <h2><span><span class="badge">2</span> EXTRACTED SQL (+MARKERS)</span> <button onclick="copyToAnsi()"
+                    class="btn-sm">ANSI 입력으로 복사</button></h2>
+            <textarea id="firstArea" placeholder="추출된 SQL이 여기에 표시됩니다."></textarea>
+        </div>
+        <!-- 3. ANSI SQL Area -->
+        <div class="area">
+            <h2><span><span class="badge">3</span> ANSI SQL (INPUT)</span></h2>
+            <textarea id="ansiArea" placeholder="변환된 ANSI SQL을 여기에 붙여넣으세요..."></textarea>
+        </div>
+        <!-- 4. Final Result Area -->
+        <div class="area">
+            <h2><span><span class="badge">4</span> FINAL JAVA SOURCE</span> <button onclick="copyFinal()"
+                    class="btn-sm">결과 복사</button></h2>
+            <textarea id="finalArea" placeholder="최종 Java 코드가 여기에 생성됩니다."></textarea>
         </div>
     </div>
+
     <script>
-        const inp = document.getElementById('inp');
-        const out = document.getElementById('out').children[0];
+        const el = id => document.getElementById(id);
 
-        const extract = (code) => {
-            if (!code) return '';
-            // 1. Remove Java Comments
-            let live = code.replace(/\/\*[\s\S]*?\*\//g, "");
-            live = live.split('\n').map(line => {
-                let q = false, s = "";
-                for (let i = 0; i < line.length; i++) {
-                    if (line[i] === '"' && (i === 0 || line[i - 1] !== '\\')) q = !q;
-                    if (!q && line[i] === '/' && line[i + 1] === '/') break;
-                    s += line[i];
+        // 1. Extraction Logic (Input -> First)
+        el('inputArea').addEventListener('input', () => {
+            const raw = el('inputArea').value;
+            if (!raw) { el('firstArea').value = ''; return; }
+
+            let resultLines = [];
+            // Preserve Java multi-line comments as markers
+            let tempCode = raw;
+            const multiMarker = (m) => `/*<@\n${m.slice(2, -2).trim()}\n@>*/`;
+            tempCode = tempCode.replace(/\/\*[\s\S]*?\*\//g, (m) => {
+                // Keep the marker notation
+                return `/*<@${m.slice(2, -2)}@>*/`;
+            });
+
+            const lines = tempCode.split('\n');
+            lines.forEach(line => {
+                let cleanLine = line.trim();
+
+                // Case for Java comments (single line)
+                if (cleanLine.startsWith('//')) {
+                    resultLines.push(`/*@ ${cleanLine} */`);
+                    return;
                 }
-                return s;
-            }).join('\n');
 
-            // 2. Extract .append("...")
-            const regex = /\.append\s*\(\s*"(.*?)"\s*\)/gs;
-            let m, res = [];
-            while ((m = regex.exec(live)) !== null) {
-                res.push(m[1].replace(/\\"/g, '"').replace(/\\n/g, '\n').replace(/\\t/g, '\t'));
+                // Handle multi-line markers
+                if (cleanLine.startsWith('/*<@') && cleanLine.endsWith('@>*/')) {
+                    resultLines.push(`/*<@${cleanLine.slice(4, -4)}@>*/`);
+                    return;
+                }
+
+                // Extract string content from append or +=
+                const strRegex = /"(.*?)"/g;
+                let m;
+                let foundStr = false;
+                while ((m = strRegex.exec(line)) !== null) {
+                    foundStr = true;
+                    let sqlPart = m[1].replace(/\\n/g, '').replace(/\\"/g, '"');
+
+                    // Look for inline Java comments after the append/string
+                    let suffix = "";
+                    const inlineComment = /\/\/\s*(.*)$|\/\*\s*(.*)\s*\*\//.exec(line.slice(m.index + m[0].length));
+                    if (inlineComment) {
+                        suffix = ` /*@ ${inlineComment[0].trim()} */`;
+                    }
+
+                    resultLines.push(sqlPart + suffix);
+                }
+            });
+
+            el('firstArea').value = resultLines.join('\n');
+        });
+
+        function copyToAnsi() { el('ansiArea').value = el('firstArea').value; }
+
+        // 2. Final Wrapping Logic (Ansi -> Final)
+        function processFinal() {
+            const ansi = el('ansiArea').value;
+            const original = el('inputArea').value;
+            if (!ansi) return;
+
+            // Detect style from original: uses semicolon? uses dot-chaining?
+            const isSemicolonStyle = /sb\.append\(.*?\);/s.test(original) || /;\s*$/.test(original.trim());
+            const varNameMatch = /([a-zA-Z0-9_]+)\.append/i.exec(original) || /([a-zA-Z0-9_]+)\s*\+=\s*/i.exec(original);
+            const varName = varNameMatch ? varNameMatch[1] : 'sb';
+
+            const lines = ansi.split('\n');
+            let finalLines = [];
+
+            lines.forEach((line, idx) => {
+                let l = line.trim();
+                if (!l) return;
+
+                // Restore markers
+                if (l.startsWith('/*<@') && l.endsWith('@>*/')) {
+                    finalLines.push(`/*${l.slice(4, -4)}*/`);
+                    return;
+                }
+                if (l.startsWith('/*@') && l.endsWith('*/')) {
+                    finalLines.push(l.slice(4, -3).trim());
+                    return;
+                }
+
+                // Extract inline markers if any
+                let inlineComm = "";
+                l = l.replace(/\/\*@\s*(.*)\s*\*\/$/, (m, g1) => {
+                    inlineComm = ` ${g1}`;
+                    return "";
+                }).trim();
+
+                // Check if it's the last line for semicolon placement (only for semicolon style)
+                const isLast = (idx === lines.length - 1);
+
+                if (isSemicolonStyle) {
+                    finalLines.push(`${varName}.append("${l} \\n ");${inlineComm}`);
+                } else {
+                    // Dot chaining style
+                    const prefix = idx === 0 ? `${varName}.append` : `      .append`;
+                    const suffix = (isLast && !original.includes('.append(')) ? ';' : '';
+                    finalLines.push(`${prefix}("${l} \\n ")${suffix}${inlineComm}`);
+                }
+            });
+
+            // Adjust semicolon for dot chaining if not present
+            if (!isSemicolonStyle && finalLines.length > 0) {
+                let lastIdx = finalLines.length - 1;
+                if (!finalLines[lastIdx].endsWith(';')) {
+                    // Find the last real append line
+                    for (let i = lastIdx; i >= 0; i--) {
+                        if (finalLines[i].includes('.append')) {
+                            finalLines[i] += ';';
+                            break;
+                        }
+                    }
+                }
             }
 
-            // 3. Fallback to simple quotes if no append found
-            if (res.length === 0) {
-                const sRegex = /"(.*?)"/g;
-                while ((m = sRegex.exec(live)) !== null) {
-                    if (m[1].trim().length > 3) res.push(m[1].replace(/\\"/g, '"'));
-                }
-            }
-            return res.map(l => l.trimEnd()).join('\n').trim();
-        };
+            el('finalArea').value = finalLines.join('\n');
+        }
 
-        inp.addEventListener('input', () => { out.textContent = extract(inp.value); });
+        function copyFinal() {
+            const v = el('finalArea').value;
+            navigator.clipboard.writeText(v).then(() => alert('Java 코드가 복사되었습니다.'));
+        }
 
-        function copySql() {
-            navigator.clipboard.writeText(out.textContent).then(() => alert('복사되었습니다.'));
+        function loadSample() {
+            el('inputArea').value = `@case1
+StringBuilder query = new StringBuilder();
+/*
+query.append("SELECT EMP_ID, EMP_NAME "); /**/ //
+*/
+//상수처리
+query.append(" select * \\n "); /* 처리 */
+query.append(" from tab1, tab2 \\n"); //처리
+query.append(" where 1=1 --주석 \\n"); //처리
+query.append(" and tab1.a = tab2.a --주석 \\n "); //사용`;
+            el('inputArea').dispatchEvent(new Event('input'));
         }
     </script>
 </body>

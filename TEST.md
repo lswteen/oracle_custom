@@ -1,88 +1,39 @@
-# SQL Extractor Test Cases
+# SQL Extractor 4-Area Workflow Test
 
-본 문서는 Java 코드 내에서 SQL을 추출할 때 발생할 수 있는 복잡한 주석 상황들을 테스트하기 위한 샘플 모음입니다.
+이 문서는 새롭게 구현된 4단계 워크플로우(Input -> Extraction -> ANSI -> Final)를 검증하기 위한 가이드입니다.
 
 ---
 
-## 🧪 Test Case 1: 복잡한 Java 주석 (Nested Comments)
+## 🛠 워크플로우 단계
+1. **Area 1 (Input)**: 원본 Java 코드를 붙여넣습니다. (주석 포함 가능)
+2. **Area 2 (Extraction)**: Java 주석이 `/*@ ... */` 마커로 자동 변환되어 SQL과 함께 표시됩니다.
+3. **Area 3 (ANSI)**: Area 2의 내용을 복사하여 붙여넣습니다. (실제 환경에서는 여기서 ANSI 쿼리로 변환을 수행합니다.)
+4. **Area 4 (Final)**: 상단의 **"최종 결과 생성"** 버튼을 누르면 원래의 Java 스타일로 다시 래핑됩니다.
 
-Java의 멀티라인 주석(`/* */`)과 싱글라인 주석(`//`)이 섞여 있는 경우입니다. 주석 처리된 `append`는 무시되고 실제 실행되는 코드만 추출되어야 합니다.
+---
 
-### Input (Java Source)
+## 🧪 테스트 케이스 1-4 (User Cases)
+
+### Input (Area 1)
 ```java
-
+// Case 1 & 2 혼합
 StringBuilder query = new StringBuilder();
 /*
 query.append("SELECT EMP_ID, EMP_NAME "); /**/ //
 */
-//query.append("SELECT EMP_ID, EMP_NAME ");
-/* SELECT EMP_ID, EMP_NAME */
-query.append( " SELECT EMP_ID, EMP_NAME "); /**/ //
+//상수처리
+query.append(" select * \n "); /* 처리 */
+query.append(" from tab1, tab2 \n"); //처리
+
+// Case 3 & 4 (Dot Chaining)
+append(" select * \n ").
+append(" from tab1 \n ").
+// 조건입력
+append(" where 1=1 --주석 \n ").
+append(" and tab1.a = 'text' --주석 \n "); // 2025후 반영
 ```
 
-### Expected Output (Oracle SQL)
-```sql
-SELECT EMP_ID, EMP_NAME
-```
-
----
-
-## 🧪 Test Case 2: 체이닝 및 SQL 주석 포함
-
-`.append()`가 줄바꿈으로 연결되어 있고, 문자열 내부에 Oracle SQL 주석(`--`, `/* */`)이 포함된 경우입니다.
-
-### Input (Java Source)
-```java
-@case2
-StringBuilder query = new StringBuilder().
-append("SELECT EMP_ID, EMP_NAME -- "). /**/
-append("AND SALARY > 5000 /**/ "); //
-
-query.append("FROM EMPLOYEES -- 직원 테이블 조회 ")
-     .append("WHERE DEPT_ID = '10' /* 기획부서 */ ")
-     .append("AND SALARY > 5000;");
-```
-
-### Expected Output (Oracle SQL)
-```sql
-SELECT EMP_ID, EMP_NAME -- 
-AND SALARY > 5000 /**/ 
-FROM EMPLOYEES -- 직원 테이블 조회 
-WHERE DEPT_ID = '10' /* 기획부서 */ 
-AND SALARY > 5000;
-```
-
----
-
-## 🧪 Test Case 3: MERGE INTO (Oracle Specific)
-
-Oracle 전용 구문인 `MERGE INTO`와 한글 주석이 섞인 케이스입니다.
-
-### Input (Java Source)
-```java
-sb.append("MERGE INTO MEMBER_T T ")
-  .append("USING (SELECT 'M001' AS ID FROM DUAL) S ")
-  .append("ON (T.MEM_ID = S.ID) ")
-  .append("WHEN MATCHED THEN ")
-  .append("    UPDATE SET T.LAST_LOGIN = SYSDATE ")
-  .append("WHEN NOT MATCHED THEN ")
-  .append("    INSERT (MEM_ID, REG_DT) VALUES (S.ID, SYSDATE); -- MERGE 문 검증");
-```
-
-### Expected Output (Oracle SQL)
-```sql
-MERGE INTO MEMBER_T T 
-USING (SELECT 'M001' AS ID FROM DUAL) S 
-ON (T.MEM_ID = S.ID) 
-WHEN MATCHED THEN 
-    UPDATE SET T.LAST_LOGIN = SYSDATE 
-WHEN NOT MATCHED THEN 
-    INSERT (MEM_ID, REG_DT) VALUES (S.ID, SYSDATE); -- MERGE 문 검증
-```
-
----
-
-## ✅ 확인 방법
-1. 위의 **Input** 코드를 복사합니다.
-2. 실행 중인 대시보드의 **Java Source Code** (오른쪽 패널) 영역에 붙여넣습니다.
-3. 왼쪽 패널의 결과가 **Expected Output**과 일치하는지 확인합니다.
+### Expected Flow Verification
+- **Area 2**에서 `/*<@ ... @>*/`로 감싸진 블록 주석과 `/*@ //... */`로 변환된 한 줄 주석이 보이는지 확인하세요.
+- **Area 3**에 내용을 그대로 넣고 **"최종 결과 생성"**을 눌렀을 때, 원래의 `query.append` 또는 `.append()` 스타일이 유지되는지 확인하세요.
+- 마지막 라인에 `;`가 올바르게 붙는지 확인하세요.
