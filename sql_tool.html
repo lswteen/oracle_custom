@@ -3,13 +3,15 @@
 
 <head>
     <meta charset="UTF-8">
-    <title>SQL Extractor Pro (4-Area)</title>
+    <title>SQL Converter Pro (Offline Standalone)</title>
     <style>
         :root {
             --p: #6366f1;
             --bg: #0f172a;
             --fg: #f8fafc;
             --b: rgba(255, 255, 255, 0.1);
+            --err: #ef4444;
+            --suc: #22c55e;
         }
 
         body {
@@ -24,7 +26,7 @@
         }
 
         header {
-            padding: 10px 20px;
+            padding: 8px 15px;
             display: flex;
             justify-content: space-between;
             align-items: center;
@@ -32,7 +34,7 @@
             background: rgba(0, 0, 0, 0.2);
         }
 
-        .main-container {
+        .main {
             display: grid;
             grid-template-columns: 1fr 1fr;
             grid-template-rows: 1fr 1fr;
@@ -50,7 +52,7 @@
         }
 
         h2 {
-            font-size: 11px;
+            font-size: 10px;
             padding: 6px 10px;
             margin: 0;
             background: rgba(255, 255, 255, 0.05);
@@ -58,24 +60,26 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
+            border-bottom: 1px solid var(--b);
         }
 
         textarea {
             flex: 1;
             width: 100%;
             border: none;
-            padding: 12px;
+            padding: 10px;
             background: transparent;
             color: inherit;
-            font-family: 'Fira Code', monospace;
+            font-family: monospace;
             font-size: 12px;
             outline: none;
             resize: none;
             box-sizing: border-box;
+            line-height: 1.4;
         }
 
-        .btn-sm {
-            padding: 2px 8px;
+        .btn {
+            padding: 3px 8px;
             font-size: 10px;
             background: var(--p);
             color: white;
@@ -84,20 +88,40 @@
             cursor: pointer;
         }
 
+        .btn-outline {
+            background: transparent;
+            border: 1px solid var(--p);
+            color: var(--p);
+            margin-left: 4px;
+        }
+
         .badge {
             font-weight: bold;
             color: var(--p);
-            margin-right: 5px;
+            margin-right: 4px;
         }
 
-        /* Scrollbar */
+        .status-msg {
+            font-size: 9px;
+            margin-right: 8px;
+            font-weight: bold;
+        }
+
+        select {
+            font-size: 10px;
+            background: #1e293b;
+            color: white;
+            border: 1px solid var(--b);
+            border-radius: 3px;
+            padding: 1px 4px;
+        }
+
         ::-webkit-scrollbar {
-            width: 6px;
-            height: 6px;
+            width: 5px;
         }
 
         ::-webkit-scrollbar-thumb {
-            background: rgba(255, 255, 255, 0.2);
+            background: rgba(255, 255, 255, 0.1);
             border-radius: 3px;
         }
     </style>
@@ -105,176 +129,256 @@
 
 <body>
     <header>
-        <strong>⚡ SQL Extractor Dashboard</strong>
+        <strong style="font-size: 12px;">⚡ SQL Toolkit (Cases 1-4 Support)</strong>
         <div>
-            <button onclick="loadSample()" class="btn-sm" style="background:#475569">샘플 로드</button>
-            <button onclick="processFinal()" class="btn-sm" style="margin-left:5px">최종 결과 생성</button>
+            <span id="vmsg" class="status-msg"></span>
+            <button onclick="copy('res')" class="btn">결과 복사</button>
         </div>
     </header>
-    <div class="main-container">
+    <div class="main">
         <!-- 1. Input Area -->
         <div class="area">
-            <h2><span><span class="badge">1</span> JAVA SOURCE (INPUT)</span></h2>
-            <textarea id="inputArea" placeholder="Java 소스를 여기에..."></textarea>
+            <h2><span><span class="badge">1</span> INPUT AREA</span></h2>
+            <textarea id="src" placeholder="Java 코드를 여기에 (Cases 1-4)..."></textarea>
         </div>
-        <!-- 2. First Extraction Area -->
+        <!-- 2. First Area -->
         <div class="area">
-            <h2><span><span class="badge">2</span> EXTRACTED SQL (+MARKERS)</span> <button onclick="copyToAnsi()"
-                    class="btn-sm">ANSI 입력으로 복사</button></h2>
-            <textarea id="firstArea" placeholder="추출된 SQL이 여기에 표시됩니다."></textarea>
+            <h2><span><span class="badge">2</span> FIRST AREA</span> <button onclick="copy('ora')"
+                    class="btn btn-outline">복사</button></h2>
+            <textarea id="ora" placeholder="추출된 SQL (Markers 포함)..."></textarea>
         </div>
-        <!-- 3. ANSI SQL Area -->
+        <!-- 3. Ansi Area -->
         <div class="area">
-            <h2><span><span class="badge">3</span> ANSI SQL (INPUT)</span></h2>
-            <textarea id="ansiArea" placeholder="변환된 ANSI SQL을 여기에 붙여넣으세요..."></textarea>
+            <h2><span><span class="badge">3</span> ANSI AREA</span> <button onclick="autoConvert()"
+                    class="btn btn-outline">Oracle->PG 변환</button></h2>
+            <textarea id="pgs" placeholder="변환된 SQL (Ansi)..."></textarea>
         </div>
-        <!-- 4. Final Result Area -->
+        <!-- 4. Result Area -->
         <div class="area">
-            <h2><span><span class="badge">4</span> FINAL JAVA SOURCE</span> <button onclick="copyFinal()"
-                    class="btn-sm">결과 복사</button></h2>
-            <textarea id="finalArea" placeholder="최종 Java 코드가 여기에 생성됩니다."></textarea>
+            <h2>
+                <span><span class="badge">4</span> RESULT AREA</span>
+            </h2>
+            <textarea id="res" readonly placeholder="최종 결과..."></textarea>
         </div>
     </div>
-
     <script>
         const el = id => document.getElementById(id);
 
-        // 1. Extraction Logic (Input -> First)
-        el('inputArea').addEventListener('input', () => {
-            const raw = el('inputArea').value;
-            if (!raw) { el('firstArea').value = ''; return; }
+        const OracleToPostgres = {
+            transform: function (sql) {
+                if (!sql) return "";
+                let res = sql;
+                res = res.replace(/NVL\(/gi, 'COALESCE(');
+                res = res.replace(/SYSDATE/gi, 'CURRENT_TIMESTAMP');
+                res = res.replace(/SELECT\s+(.*?)\s+FROM\s+DUAL/gi, 'SELECT $1');
+                res = res.replace(/FROM\s+DUAL/gi, '/* FROM DUAL removed */');
+                res = res.replace(/decode\(([^,]+),\s*([^,]+),\s*([^,]+),\s*([^,]+),\s*([^,]+),\s*([^)]+)\)/gi, 'CASE WHEN $1 = $2 THEN $3 WHEN $1 = $4 THEN $5 ELSE $6 END');
+                res = res.replace(/decode\(([^,]+),\s*([^,]+),\s*([^,]+),\s*([^)]+)\)/gi, 'CASE WHEN $1 = $2 THEN $3 ELSE $4 END');
+                res = res.replace(/WHERE\s+ROWNUM\s*<=\s*(\d+)/gi, 'LIMIT $1');
+                res = res.replace(/\(\+\)/g, '/* LEFT JOIN (+) */');
+                res = res.replace(/INSTR\(/gi, 'STRPOS(');
+                res = res.replace(/SUBSTR\(/gi, 'SUBSTRING(');
+                return res;
+            }
+        };
 
-            let resultLines = [];
-            // Preserve Java multi-line comments as markers
-            let tempCode = raw;
-            const multiMarker = (m) => `/*<@\n${m.slice(2, -2).trim()}\n@>*/`;
-            tempCode = tempCode.replace(/\/\*[\s\S]*?\*\//g, (m) => {
-                // Keep the marker notation
-                return `/*<@${m.slice(2, -2)}@>*/`;
-            });
+        // Extraction Styles & Logic
+        const Parser = {
+            detectStyle: (src) => {
+                const lines = src.split('\n');
+                let vName = "";
+                let type = "append"; // default
 
-            const lines = tempCode.split('\n');
-            lines.forEach(line => {
-                let cleanLine = line.trim();
+                for (let l of lines) {
+                    const trimmed = l.trim();
+                    // Detect append
+                    const appM = /([a-zA-Z0-9_$]+)\.append/i.exec(l);
+                    if (appM) { vName = appM[1]; type = "append"; break; }
 
-                // Case for Java comments (single line)
-                if (cleanLine.startsWith('//')) {
-                    resultLines.push(`/*@ ${cleanLine} */`);
-                    return;
+                    // Detect sQuery = or sQuery +=
+                    const assignM = /([a-zA-Z0-9_$]+)\s*(\+?=)\s*"/i.exec(l);
+                    if (assignM) {
+                        vName = assignM[1];
+                        type = assignM[2] === "+=" ? "plusAssign" : "assign";
+                        break;
+                    }
                 }
 
-                // Handle multi-line markers
-                if (cleanLine.startsWith('/*<@') && cleanLine.endsWith('@>*/')) {
-                    resultLines.push(`/*<@${cleanLine.slice(4, -4)}@>*/`);
-                    return;
+                // Secondary check for chained append or standalone append
+                let isChained = false;
+                if (type === "append") {
+                    if (/\.append\s*\(.*?\)\s*\./.test(src) || /append\s*\(.*?\)\s*\./.test(src)) isChained = true;
                 }
 
-                // Extract string content from append or +=
-                const strRegex = /"(.*?)"/g;
-                let m;
-                let foundStr = false;
-                while ((m = strRegex.exec(line)) !== null) {
-                    foundStr = true;
-                    let sqlPart = m[1].replace(/\\n/g, '').replace(/\\"/g, '"');
+                return { vName, type, isChained };
+            },
 
-                    // Look for inline Java comments after the append/string
-                    let suffix = "";
-                    const inlineComment = /\/\/\s*(.*)$|\/\*\s*(.*)\s*\*\//.exec(line.slice(m.index + m[0].length));
-                    if (inlineComment) {
-                        suffix = ` /*@ ${inlineComment[0].trim()} */`;
+            extract: (src) => {
+                const lines = src.split('\n');
+                let result = [];
+                let inBlock = false;
+
+                lines.forEach(line => {
+                    const trimmed = line.trim();
+
+                    // 1. Handle Block Comments
+                    if (trimmed.startsWith('/*')) {
+                        inBlock = true;
+                        result.push("/*<@");
+                        if (trimmed.includes('*/')) {
+                            const content = line.substring(line.indexOf('/*') + 2, line.lastIndexOf('*/')).trim();
+                            if (content) result.push(content);
+                            result.push("@>*/");
+                            inBlock = false;
+                        } else {
+                            const content = line.substring(line.indexOf('/*') + 2).trim();
+                            if (content) result.push(content);
+                        }
+                        return;
+                    }
+                    if (inBlock) {
+                        if (trimmed.includes('*/')) {
+                            const content = line.substring(0, line.lastIndexOf('*/')).trim();
+                            if (content) result.push(content);
+                            result.push("@>*/");
+                            inBlock = false;
+                        } else {
+                            result.push(line);
+                        }
+                        return;
                     }
 
-                    resultLines.push(sqlPart + suffix);
-                }
-            });
+                    // 2. Handle Standalone Comment
+                    if (trimmed.startsWith('//')) {
+                        result.push(`/*@ ${trimmed} */`);
+                        return;
+                    }
 
-            el('firstArea').value = resultLines.join('\n');
-        });
+                    // 3. Handle Code Lines (append or assignments)
+                    const stringRegex = /"(.*?)"/;
+                    const match = stringRegex.exec(line);
+                    if (match) {
+                        let sql = match[1].replace(/\\n/g, '').replace(/\\r/g, '').replace(/\\"/g, '"').trimEnd();
 
-        function copyToAnsi() { el('ansiArea').value = el('firstArea').value; }
+                        // Extract trailing comment
+                        let trailer = line.substring(line.indexOf(match[0]) + match[0].length);
+                        const cMatch = /(\/\/.*|\/\*.*?\*\/)/.exec(trailer);
+                        let marker = "";
+                        if (cMatch) {
+                            const c = cMatch[1];
+                            if (c.startsWith('//')) marker = `/*@ ${c.trim()} */`;
+                            else marker = `/*@@ ${c.substring(2, c.length - 2).trim()} */`;
+                        }
 
-        // 2. Final Wrapping Logic (Ansi -> Final)
-        function processFinal() {
-            const ansi = el('ansiArea').value;
-            const original = el('inputArea').value;
-            if (!ansi) return;
-
-            // Detect style from original: uses semicolon? uses dot-chaining?
-            const isSemicolonStyle = /sb\.append\(.*?\);/s.test(original) || /;\s*$/.test(original.trim());
-            const varNameMatch = /([a-zA-Z0-9_]+)\.append/i.exec(original) || /([a-zA-Z0-9_]+)\s*\+=\s*/i.exec(original);
-            const varName = varNameMatch ? varNameMatch[1] : 'sb';
-
-            const lines = ansi.split('\n');
-            let finalLines = [];
-
-            lines.forEach((line, idx) => {
-                let l = line.trim();
-                if (!l) return;
-
-                // Restore markers
-                if (l.startsWith('/*<@') && l.endsWith('@>*/')) {
-                    finalLines.push(`/*${l.slice(4, -4)}*/`);
-                    return;
-                }
-                if (l.startsWith('/*@') && l.endsWith('*/')) {
-                    finalLines.push(l.slice(4, -3).trim());
-                    return;
-                }
-
-                // Extract inline markers if any
-                let inlineComm = "";
-                l = l.replace(/\/\*@\s*(.*)\s*\*\/$/, (m, g1) => {
-                    inlineComm = ` ${g1}`;
-                    return "";
-                }).trim();
-
-                // Check if it's the last line for semicolon placement (only for semicolon style)
-                const isLast = (idx === lines.length - 1);
-
-                if (isSemicolonStyle) {
-                    finalLines.push(`${varName}.append("${l} \\n ");${inlineComm}`);
-                } else {
-                    // Dot chaining style
-                    const prefix = idx === 0 ? `${varName}.append` : `      .append`;
-                    const suffix = (isLast && !original.includes('.append(')) ? ';' : '';
-                    finalLines.push(`${prefix}("${l} \\n ")${suffix}${inlineComm}`);
-                }
-            });
-
-            // Adjust semicolon for dot chaining if not present
-            if (!isSemicolonStyle && finalLines.length > 0) {
-                let lastIdx = finalLines.length - 1;
-                if (!finalLines[lastIdx].endsWith(';')) {
-                    // Find the last real append line
-                    for (let i = lastIdx; i >= 0; i--) {
-                        if (finalLines[i].includes('.append')) {
-                            finalLines[i] += ';';
-                            break;
+                        result.push(sql + (marker ? " " + marker : ""));
+                    } else if (trimmed) {
+                        // Other non-empty lines - check for comments
+                        const cMatch = /(\/\/.*|\/\*.*?\*\/)/.exec(line);
+                        if (cMatch) {
+                            const c = cMatch[1];
+                            if (c.startsWith('//')) result.push(`/*@ ${c.trim()} */`);
+                            else result.push(`/*@@ ${c.substring(2, c.length - 2).trim()} */`);
                         }
                     }
-                }
+                });
+                return result.join('\n');
             }
+        };
 
-            el('finalArea').value = finalLines.join('\n');
+        // 1. Extract logic (Input -> First)
+        el('src').addEventListener('input', () => {
+            const src = el('src').value;
+            if (!src) { el('ora').value = ''; return; }
+            el('ora').value = Parser.extract(src);
+            if (el('pgs').value) wrapJava();
+        });
+
+        // 2. Auto Conversion
+        function autoConvert() {
+            const oraSql = el('ora').value;
+            if (oraSql) {
+                el('pgs').value = OracleToPostgres.transform(oraSql);
+                wrapJava();
+            }
         }
 
-        function copyFinal() {
-            const v = el('finalArea').value;
-            navigator.clipboard.writeText(v).then(() => alert('Java 코드가 복사되었습니다.'));
+        // 3. Wrapping logic (Ansi -> Result)
+        el('pgs').addEventListener('input', wrapJava);
+
+        function wrapJava() {
+            const ansi = el('pgs').value;
+            const src = el('src').value;
+            if (!ansi) { el('res').value = ''; return; }
+
+            const style = Parser.detectStyle(src);
+            const lines = ansi.split('\n');
+            let result = [];
+            let inBlock = false;
+
+            lines.forEach((l, idx) => {
+                const trimmed = l.trim();
+                const isFirst = idx === 0;
+                const isLast = idx === lines.length - 1;
+
+                // Handle Block Marker
+                if (trimmed === "/*<@") { inBlock = true; result.push("/*"); return; }
+                if (trimmed === "@>*/") { inBlock = false; result.push("*/"); return; }
+                if (inBlock) { result.push(l); return; }
+
+                // Detect markers
+                let sql = l;
+                let comment = "";
+                const m1 = /\/\*@ (.*?) \*\//.exec(l); // // style
+                const m2 = /\/\*@@ (.*?) \*\//.exec(l); // /* */ style
+
+                if (m1) {
+                    comment = m1[1];
+                    sql = l.replace(m1[0], '').trimEnd();
+                } else if (m2) {
+                    comment = "/* " + m2[1] + " */";
+                    sql = l.replace(m2[0], '').trimEnd();
+                }
+
+                if (!sql.trim() && comment) {
+                    result.push(comment);
+                    return;
+                }
+
+                // Wrap Logic
+                if (sql.trim() || (!sql.trim() && !comment)) {
+                    let wrapped = "";
+                    if (style.type === "append") {
+                        const vPrefix = style.vName ? `${style.vName}.` : "";
+                        const suffix = (style.isChained && !isLast) ? "." : ";";
+                        wrapped = `${vPrefix}append("${sql} \\n ")${suffix}`;
+                    } else if (style.type === "plusAssign") {
+                        wrapped = `${style.vName} += "${sql} \\n ";`;
+                    } else { // assign
+                        if (isFirst) {
+                            wrapped = `${style.vName} = "${sql} \\n "`;
+                        } else {
+                            wrapped = `    + "${sql} \\n "`;
+                        }
+                        if (isLast) wrapped += ";";
+                    }
+
+                    if (comment) wrapped += ` ${comment}`;
+                    result.push(wrapped);
+                }
+            });
+
+            el('res').value = result.join('\n');
         }
 
-        function loadSample() {
-            el('inputArea').value = `@case1
-StringBuilder query = new StringBuilder();
-/*
-query.append("SELECT EMP_ID, EMP_NAME "); /**/ //
-*/
-//상수처리
-query.append(" select * \\n "); /* 처리 */
-query.append(" from tab1, tab2 \\n"); //처리
-query.append(" where 1=1 --주석 \\n"); //처리
-query.append(" and tab1.a = tab2.a --주석 \\n "); //사용`;
-            el('inputArea').dispatchEvent(new Event('input'));
+        function copy(id) {
+            const v = el(id).value;
+            if (!v) return;
+            navigator.clipboard.writeText(v).then(() => {
+                const b = event.target;
+                const t = b.innerText;
+                b.innerText = 'OK';
+                setTimeout(() => b.innerText = t, 800);
+            });
         }
     </script>
 </body>
