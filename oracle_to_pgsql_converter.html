@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Oracle to PG Converter Pro</title>
+    <style>
+        :root {
+            --primary: #2563eb;
+            --primary-hover: #1d4ed8;
+            --bg-deep: #0f172a;
+            --bg-card: #1e293b;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --border: rgba(255, 255, 255, 0.1);
+            --accent: #38bdf8;
+            --success: #22c55e;
+            --warning: #f59e0b;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, sans-serif;
+            background: var(--bg-deep);
+            color: var(--text-main);
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        header {
+            padding: 12px 24px;
+            background: rgba(15, 23, 42, 0.8);
+            backdrop-filter: blur(8px);
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo {
+            font-size: 18px;
+            font-weight: 800;
+            letter-spacing: -0.5px;
+            background: linear-gradient(to right, #38bdf8, #818cf8);
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .main-layout {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            grid-template-rows: 1fr 1fr;
+            flex: 1;
+            gap: 1px;
+            background: var(--border);
+        }
+
+        .panel {
+            background: var(--bg-deep);
+            display: flex;
+            flex-direction: column;
+            position: relative;
+        }
+
+        .panel-header {
+            padding: 8px 16px;
+            background: rgba(255, 255, 255, 0.03);
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        textarea {
+            flex: 1;
+            background: transparent;
+            border: none;
+            color: var(--text-main);
+            font-family: 'Fira Code', 'Consolas', monospace;
+            font-size: 13px;
+            padding: 16px;
+            resize: none;
+            outline: none;
+            line-height: 1.6;
+        }
+
+        .btn {
+            padding: 6px 12px;
+            font-size: 11px;
+            font-weight: 600;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.2s;
+            border: 1px solid transparent;
+        }
+
+        .btn-primary {
+            background: var(--primary);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: var(--primary-hover);
+        }
+
+        .btn-ghost {
+            background: transparent;
+            color: var(--text-muted);
+            border-color: var(--border);
+        }
+
+        .btn-ghost:hover {
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-main);
+        }
+
+        .notif {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            padding: 12px 24px;
+            background: var(--success);
+            color: white;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3);
+            transform: translateY(100px);
+            transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+
+        .notif.show {
+            transform: translateY(0);
+        }
+
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: var(--border);
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+
+        .helper-list {
+            position: absolute;
+            top: 40px;
+            right: 16px;
+            background: #1e293b;
+            border: 1px solid var(--border);
+            padding: 8px;
+            font-size: 10px;
+            border-radius: 4px;
+            display: none;
+            z-index: 10;
+        }
+    </style>
+</head>
+
+<body>
+    <header>
+        <div class="logo">ORACLE ➜ POSTGRESQL</div>
+        <div style="display: flex; gap: 8px;">
+            <button class="btn btn-ghost" onclick="clearAll()">Clear All</button>
+            <button class="btn btn-primary" onclick="copyResult()">Final Copy</button>
+        </div>
+    </header>
+
+    <div class="main-layout">
+        <!-- Input Panel -->
+        <div class="panel">
+            <div class="panel-header">
+                <span>1. Java Source</span>
+                <span style="color: var(--warning)">Paste original code</span>
+            </div>
+            <textarea id="javaIn" placeholder="StringBuffer.append() or String concatenation code here..."></textarea>
+        </div>
+
+        <!-- Extraction Panel -->
+        <div class="panel">
+            <div class="panel-header">
+                <span>2. Extracted Oracle SQL</span>
+                <button class="btn btn-ghost" onclick="copy('oracleOut')">Copy</button>
+            </div>
+            <textarea id="oracleOut" placeholder="Extracted SQL will appear here..."></textarea>
+        </div>
+
+        <!-- Transformation Panel -->
+        <div class="panel">
+            <div class="panel-header">
+                <span>3. Transformed PG SQL</span>
+                <div style="display: flex; gap: 8px;">
+                    <button class="btn btn-primary" onclick="convert()">Transform Now</button>
+                    <button class="btn btn-ghost" onclick="copy('pgOut')">Copy</button>
+                </div>
+            </div>
+            <textarea id="pgOut" placeholder="PostgreSQL compatible SQL..."></textarea>
+        </div>
+
+        <!-- Result Panel -->
+        <div class="panel">
+            <div class="panel-header">
+                <span>4. Final Java Wrapped</span>
+                <button class="btn btn-ghost" onclick="copy('finalRes')">Copy</button>
+            </div>
+            <textarea id="finalRes" readonly placeholder="Result code to paste back into Java..."></textarea>
+        </div>
+    </div>
+
+    <div id="notif" class="notif">Copied to clipboard!</div>
+
+    <script>
+        const $ = id => document.getElementById(id);
+
+        // --- SQL Conversion Core ---
+        const OracleToPG = {
+            transform: function (sql) {
+                if (!sql) return "";
+                let res = sql;
+
+                // 1. Basic Functions
+                res = res.replace(/NVL\(/gi, 'COALESCE(');
+                res = res.replace(/SYSDATE/gi, 'CURRENT_TIMESTAMP');
+                res = res.replace(/SYSTIMESTAMP/gi, 'CURRENT_TIMESTAMP');
+
+                // 2. NVL2 Support: NVL2(a, b, c) -> CASE WHEN a IS NOT NULL THEN b ELSE c END
+                res = res.replace(/NVL2\(([^,]+),\s*([^,]+),\s*([^)]+)\)/gi, (match, p1, p2, p3) => {
+                    return `CASE WHEN ${p1.trim()} IS NOT NULL THEN ${p2.trim()} ELSE ${p3.trim()} END`;
+                });
+
+                // 3. Dual Removal
+                res = res.replace(/FROM\s+DUAL/gi, '/* FROM DUAL */');
+                res = res.replace(/SELECT\s+(.*?)\s+FROM\s+DUAL/gi, 'SELECT $1');
+
+                // 4. Decode (Dynamic)
+                // Recursive replacement for DECODE
+                const decodeRegex = /DECODE\(([^,]+),\s*([^)]+)\)/gi;
+                while (res.match(decodeRegex)) {
+                    res = res.replace(decodeRegex, (match, val, args) => {
+                        const parts = splitCsv(args);
+                        let caseStmt = `CASE WHEN ${val.trim()}`;
+                        for (let i = 0; i < parts.length - 1; i += 2) {
+                            if (i + 1 < parts.length) {
+                                caseStmt += ` = ${parts[i].trim()} THEN ${parts[i + 1].trim()}`;
+                            }
+                        }
+                        if (parts.length % 2 === 1) {
+                            caseStmt += ` ELSE ${parts[parts.length - 1].trim()}`;
+                        }
+                        caseStmt += ` END`;
+                        return caseStmt;
+                    });
+                }
+
+                // 5. DB Link Removal (@dblink)
+                res = res.replace(/([a-zA-Z0-9_$]+)@([a-zA-Z0-9_$]+)/gi, '$1 /* @$2 */');
+
+                // 6. Outer Join (+) -> LEFT JOIN Reconstruction Hint
+                // Attempt simple pattern: table1 alias1, table2 alias2 WHERE alias1.id = alias2.id(+)
+                // Since full cross-line parsing is risky, we provide a clearer "ANSI Reconstruction" comment
+                // and a helper specifically for moving conditions to ON clauses.
+                res = res.replace(/([a-zA-Z0-9_.]+)\s*=\s*([a-zA-Z0-9_.]+)\s*\(\+\)/g, (match, p1, p2) => {
+                    return `/* ANSI: JOIN ${p2.split('.')[0]} ON ${p1} = ${p2} */ ${p1} = ${p2}`;
+                });
+                res = res.replace(/([a-zA-Z0-9_.]+)\s*\(\+\)\s*=\s*([a-zA-Z0-9_.]+)/g, (match, p1, p2) => {
+                    return `/* ANSI: LEFT JOIN ${p1.split('.')[0]} ON ${p1} = ${p2} */ ${p1} = ${p2}`;
+                });
+                res = res.replace(/\(\+\)/g, '/* (+) OUTER JOIN */');
+
+                // 7. TO_CHAR / Date Formatting
+                res = res.replace(/TO_CHAR\(([^,]+),\s*'YYYYMMDD'\)/gi, "TO_CHAR($1, 'YYYYMMDD')");
+                res = res.replace(/TO_CHAR\(([^,]+),\s*'YYYY-MM-DD HH24:MI:SS'\)/gi, "TO_CHAR($1, 'YYYY-MM-DD HH24:MI:SS')");
+                res = res.replace(/TO_DATE\(([^,]+),\s*'YYYYMMDD'\)/gi, "CAST($1 AS DATE)");
+
+                // 8. Trunc
+                res = res.replace(/TRUNC\(CURRENT_TIMESTAMP\)/gi, 'CURRENT_DATE');
+                res = res.replace(/TRUNC\(([^,)]+)\)/gi, 'DATE_TRUNC(\'day\', $1)');
+
+                // 9. Instr / Substr
+                res = res.replace(/INSTR\(/gi, 'STRPOS(');
+                res = res.replace(/SUBSTR\(/gi, 'SUBSTRING(');
+
+                // 10. Rownum to Limit
+                res = res.replace(/WHERE\s+ROWNUM\s*<=\s*(\d+)/gi, 'LIMIT $1');
+                res = res.replace(/AND\s+ROWNUM\s*<=\s*(\d+)/gi, 'LIMIT $1');
+
+                return res;
+            }
+        };
+
+        // Helper to split CSV but respect nested parens
+        function splitCsv(str) {
+            const results = [];
+            let current = "";
+            let depth = 0;
+            for (let char of str) {
+                if (char === ',' && depth === 0) {
+                    results.push(current);
+                    current = "";
+                } else {
+                    if (char === '(') depth++;
+                    if (char === ')') depth--;
+                    current += char;
+                }
+            }
+            results.push(current);
+            return results;
+        }
+
+        // --- Extraction & Wrapping ---
+        const Parser = {
+            extract: (src) => {
+                const lines = src.split('\n');
+                let result = [];
+                lines.forEach(line => {
+                    // Extract SQL content between double quotes
+                    const match = /"(.*?)"/.exec(line);
+                    if (match) {
+                        result.push(match[1].replace(/\\n/g, '').replace(/\\r/g, '').replace(/\\"/g, '"').trimEnd());
+                    }
+                });
+                return result.join('\n');
+            },
+
+            detectStyle: (src) => {
+                const lines = src.split('\n');
+                let vName = "sbSql";
+                let type = "append"; // default
+
+                for (let line of lines) {
+                    const trimmed = line.trim();
+                    if (!trimmed) continue;
+
+                    // Match sb.append(" style
+                    const appendMatch = /([a-zA-Z0-9_$]+)\.append\s*\(/i.exec(trimmed);
+                    if (appendMatch) {
+                        return { vName: appendMatch[1], type: "append" };
+                    }
+
+                    // Match variable += " style
+                    const plusAssignMatch = /([a-zA-Z0-9_$]+)\s*\+=\s*"/i.exec(trimmed);
+                    if (plusAssignMatch) {
+                        return { vName: plusAssignMatch[1], type: "plusAssign" };
+                    }
+
+                    // Match variable = " style
+                    const assignMatch = /([a-zA-Z0-9_$]+)\s*=\s*"/i.exec(trimmed);
+                    if (assignMatch) {
+                        return { vName: assignMatch[1], type: "assign" };
+                    }
+                }
+                return { vName, type };
+            },
+
+            wrap: (pg, style) => {
+                const lines = pg.split('\n');
+                return lines.map((l, i) => {
+                    const sql = l.trimEnd();
+                    if (style.type === 'append') {
+                        return `${style.vName}.append("${sql} \\n ");`;
+                    } else if (style.type === 'plusAssign') {
+                        return `${style.vName} += "${sql} \\n ";`;
+                    } else {
+                        return (i === 0 ? `${style.vName} = "` : `    + "`) + `${sql} \\n "` + (i === lines.length - 1 ? ";" : "");
+                    }
+                }).join('\n');
+            }
+        };
+
+        // --- UI Logic ---
+        $('javaIn').addEventListener('input', () => {
+            const val = $('javaIn').value;
+            if (!val) { $('oracleOut').value = ''; return; }
+            $('oracleOut').value = Parser.extract(val);
+        });
+
+        function convert() {
+            const ora = $('oracleOut').value;
+            if (!ora) return;
+            const pg = OracleToPG.transform(ora);
+            $('pgOut').value = pg;
+
+            const style = Parser.detectStyle($('javaIn').value);
+            $('finalRes').value = Parser.wrap(pg, style);
+        }
+
+        function copy(id) {
+            const el = $(id);
+            el.select();
+            document.execCommand('copy');
+            showNotif();
+        }
+
+        function copyResult() { copy('finalRes'); }
+
+        function clearAll() {
+            $('javaIn').value = '';
+            $('oracleOut').value = '';
+            $('pgOut').value = '';
+            $('finalRes').value = '';
+        }
+
+        function showNotif() {
+            const n = $('notif');
+            n.classList.add('show');
+            setTimeout(() => n.classList.remove('show'), 2000);
+        }
+    </script>
+</body>
+
+</html>

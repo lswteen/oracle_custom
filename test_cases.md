@@ -171,3 +171,13 @@ append(" from tab1 outer join tab2 on tab1.a  = tab2.a \n ").
 append(" where 1=1 --주석 \n ").
 append(" and tab1.a =  'text2' --주석2 \n "); //2026년 폐기
 ```
+
+
+## evul case
+```java
+sQuery = "select * from "
++= "where a=a  " //abdeee
++= "and b='b' /*qeeffdf*/ "
++= "and cc='cc'"
+/*+ "and bbb='111' " */ //dfdfddf 
+``` 
