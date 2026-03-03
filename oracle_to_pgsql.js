@@ -137,8 +137,11 @@ const OracleToPG = (function () {
         const conditions = whereClause ? whereClause.split(/\s+AND\s+/i).map(c => c.trim()).filter(Boolean) : [];
 
         const joinStates = tables.map(t => {
-            const alias = getTableAlias(t);
-            return { raw: t, alias: alias, joined: false, type: 'JOIN', on: [] };
+            const commentMatch = /(--.*|\/\*[\s\S]*?\*\/)/.exec(t);
+            const comment = commentMatch ? commentMatch[1] : "";
+            const cleanT = t.replace(/(--.*|\/\*[\s\S]*?\*\/)/g, '').trim();
+            const alias = getTableAlias(cleanT);
+            return { raw: cleanT, alias: alias, joined: false, type: 'JOIN', on: [], comment: comment };
         });
 
         // First table is base
@@ -213,7 +216,7 @@ const OracleToPG = (function () {
                             if (!aIsJoin && bIsJoin) return 1;
                             return 0;
                         });
-                        newFrom += `\n ${s.type} ${s.raw} ON ${sortedOn.join(' AND ')}`;
+                        newFrom += `\n ${s.type} ${s.raw} ON ${sortedOn.join(' AND ')}${s.comment ? ' ' + s.comment : ''}`;
                         changed = true;
                         break;
                     }
@@ -257,7 +260,7 @@ const OracleToPG = (function () {
                         if (!aIsJoin && bIsJoin) return 1;
                         return 0;
                     });
-                    newFrom += `\n ${s.type} ${s.raw} ON ${sortedOn.join(' AND ')}`;
+                    newFrom += `\n ${s.type} ${s.raw} ON ${sortedOn.join(' AND ')}${s.comment ? ' ' + s.comment : ''}`;
                     changed = true;
                     break;
                 }
@@ -265,7 +268,7 @@ const OracleToPG = (function () {
         }
 
         joinStates.forEach(s => {
-            if (!s.joined) newFrom += ` , ${s.raw}`;
+            if (!s.joined) newFrom += ` , ${s.raw}${s.comment ? ' ' + s.comment : ''}`;
         });
 
         const finalConditions = otherWhere.map(ow => ow.cond);
@@ -282,7 +285,9 @@ const OracleToPG = (function () {
     }
 
     function getTableAlias(t) {
-        const parts = t.trim().split(/\s+/);
+        // Strip SQL comments first
+        const clean = t.replace(/(--.*|\/\*[\s\S]*?\*\/)/g, '').trim();
+        const parts = clean.split(/\s+/);
         return parts[parts.length - 1];
     }
 
