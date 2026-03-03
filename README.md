@@ -1,38 +1,163 @@
-# Java to Oracle SQL Extractor
+# Oracle to PostgreSQL Converter Pro
 
-Java 소스 코드 내의 `.append()` 패턴에서 SQL 쿼리만을 완벽하게 추출해주는 대시보드 도구입니다.
+Oracle 19c SQL 쿼리를 Azure PostgreSQL 18 환경에 맞게 변환해주는 전문가용 도구입니다. Java 소스 코드에서 SQL을 자동으로 추출하고 변환하며, 다시 Java 코드로 래핑하는 전체 워크플로우를 지원합니다.
 
-## 🚀 주요 기능
-- **자동 추출**: `.append("...")` 부분을 찾아 내부 문자열만 추출합니다.
-- **Oracle 최적화**: Oracle 주석(`--`, `/* */`), 한글 데이터, `MERGE INTO`, `ROW_NUMBER()` 등을 완벽 보존합니다.
-- **클린 출력**: Java의 이스케이프 문자(`\"`, `\n` 등)를 실제 문자로 변환하여 온전한 SQL을 만듭니다.
+---
 
-## 🧪 검증 샘플 및 결과 예시 (Oracle)
+## 🚀 주요 특징
 
-### 1. 입력 (Java Source)
-```java
-StringBuilder query = new StringBuilder();
-query.append("SELECT EMP_ID, EMP_NAME ")
-     .append("FROM EMPLOYEES -- 직원 테이블 조회 ")
-     .append("WHERE DEPT_ID = '10' /* 기획부서 */ ")
-     .append("AND SALARY > 5000;");
-```
-
-### 2. 출력 (Extracted Oracle SQL)
-```sql
-SELECT EMP_ID, EMP_NAME 
-FROM EMPLOYEES -- 직원 테이블 조회 
-WHERE DEPT_ID = '10' /* 기획부서 */ 
-AND SALARY > 5000;
-```
+- **오프라인 최적화**: 모든 로직이 로컬 JavaScript (`oracle_to_pgsql.js`)로 처리되어 인터넷 연결 없이 보안 구역에서도 사용 가능합니다.
+- **모듈형 구조**: 비즈니스 로직(JS)과 UI(HTML)가 분리되어 유지보수가 용이하며, `jquery.min.js`와 같은 유틸리티 라이브러리 형태로 제공됩니다.
+- **정교한 변환 엔진**:
+    - `NVL` -> `COALESCE`
+    - `DECODE` -> `CASE WHEN` (재귀적 처리 지원)
+    - `SYSDATE` / `SYSTIMESTAMP` -> `CURRENT_TIMESTAMP`
+    - `(+)` Outer Join -> ANSI Join 변환 가이드 주석 생성
+    - `@dblink` -> 주석 처리 및 제거
+    - `ROWNUM` -> `LIMIT`
+    - `TO_CHAR` / `TRUNC` 등 날짜 함수 변환
 
 ## 🛠 사용 방법
-1. `index.html` 파일을 브라우저로 엽니다.
-2. 오른쪽 **Java Source Code** 섹션에 코드를 붙여넣습니다.
-3. 왼쪽 **Extracted Query** 섹션에서 `append`가 제거된 온전한 SQL을 확인합니다.
-4. **Copy to Clipboard** 버튼으로 결과를 복사합니다.
 
-## 📂 프로젝트 구조
-- `index.html`: 대시보드 구조 및 레이아웃
-- `style.css`: 프리미엄 다크 모드 및 Glassmorphism 디자인
-- `script.js`: 정규식 기반 SQL 추출 로직 및 샘플 데이터
+1.  **실행**: `oracle_to_pgsql_converter.html` 파일을 크롬(Chrome)이나 엣지(Edge) 브라우저로 엽니다.
+2.  **소스 입력**: 좌상단 "1. Java Source" 패널에 `sb.append("...")` 또는 `sql += "..."` 형태의 Java 코드를 붙여넣습니다.
+3.  **자동 추출**: 입력 즉시 "2. Extracted Oracle SQL" 패널에 SQL 본문만 추출됩니다.
+4.  **변환 수행**: "Transform Now" 버튼을 클릭합니다.
+5.  **결과 확인**:
+    - "3. Transformed PG SQL"에서 변환된 PostgreSQL 쿼리를 확인합니다.
+    - "4. Final Java Wrapped"에서 다시 Java 코드로 래핑된 최종 결과물을 복사합니다.
+
+---
+
+## 🧪 기능별 변환 테스트 샘플 (10대 핵심 기능)
+
+`oracle_to_pgsql_converter.html` 도구에서 직접 테스트해볼 수 있는 기능 단위 샘플 코드입니다.
+
+### 1. NULL 처리 (NVL)
+- **기능**: NULL 또는 빈 값을 기본값으로 치환
+- **Oracle Source**:
+  ```java
+  sb.append(" SELECT NVL(USER_ID, 'GUEST') as user_id \n ");
+  sb.append(" FROM USERS \n ");
+  ```
+- **PostgreSQL Result**:
+  ```sql
+  SELECT COALESCE(USER_ID, 'GUEST') as user_id 
+  FROM USERS 
+  ```
+
+### 2. 조건부 변환 (DECODE)
+- **기능**: 복잡한 조건문을 CASE 문으로 변환 (중첩 처리 가능)
+- **Oracle Source**:
+  ```java
+  sb.append(" SELECT DECODE(STATUS, '1', '정상', '2', '정지', '기타') as status_nm \n ");
+  ```
+- **PostgreSQL Result**:
+  ```sql
+  SELECT CASE WHEN STATUS = '1' THEN '정상' WHEN STATUS = '2' THEN '정지' ELSE '기타' END as status_nm 
+  ```
+
+### 3. NULL 조건 변환 (NVL2)
+- **기능**: 값이 존재할 때와 아닐 때를 나누어 리턴
+- **Oracle Source**:
+  ```java
+  sb.append(" SELECT NVL2(MODIFY_DATE, '수정됨', '신규') as stat \n ");
+  ```
+- **PostgreSQL Result**:
+  ```sql
+  SELECT CASE WHEN MODIFY_DATE IS NOT NULL THEN '수정됨' ELSE '신규' END as stat 
+  ```
+
+### 4. 아우터 조인 (Outer Join +)
+- **기능**: 오라클 특유의 `(+)` 구문을 감지하여 ANSI Join 가이드 주석 생성
+- **Oracle Source**:
+  ```java
+  sb.append(" SELECT A.NAME, B.DEPT_NAME \n ");
+  sb.append(" FROM EMP A, DEPT B \n ");
+  sb.append(" WHERE A.DEPT_ID = B.DEPT_ID(+) \n ");
+  ```
+- **PostgreSQL Result**:
+  ```sql
+  SELECT A.NAME, B.DEPT_NAME 
+  FROM EMP A, DEPT B 
+  WHERE /* ANSI: JOIN DEPT ON A.DEPT_ID = B.DEPT_ID */ A.DEPT_ID = B.DEPT_ID 
+  ```
+
+### 5. 현재 일시 (SYSDATE / SYSTIMESTAMP)
+- **기능**: 시스템 기준 현재 시간 함수 변환
+- **Oracle Source**:
+  ```java
+  sb.append(" INSERT INTO LOGS (LOG_TIME) VALUES (SYSDATE) \n ");
+  sb.append(" SELECT SYSTIMESTAMP FROM DUAL \n ");
+  ```
+- **PostgreSQL Result**:
+  ```sql
+  INSERT INTO LOGS (LOG_TIME) VALUES (CURRENT_TIMESTAMP) 
+  SELECT CURRENT_TIMESTAMP /* FROM DUAL */ 
+  ```
+
+### 6. 날짜 가감 및 계산 (Advanced Date)
+- **기능**: `ADD_MONTHS`, `LAST_DAY`, `MONTHS_BETWEEN` 처리
+- **Oracle Source**:
+  ```java
+  sb.append(" SELECT ADD_MONTHS(SYSDATE, 1) as next_month \n ");
+  sb.append("      , LAST_DAY(SYSDATE) as end_of_month \n ");
+  ```
+- **PostgreSQL Result**:
+  ```sql
+  SELECT (CURRENT_TIMESTAMP + INTERVAL '1 month') as next_month 
+       , (DATE_TRUNC('MONTH', CURRENT_TIMESTAMP) + INTERVAL '1 MONTH - 1 day')::DATE as end_of_month 
+  ```
+
+### 7. 시퀀스 (NEXTVAL / CURRVAL)
+- **기능**: 오라클 시퀀스 구문을 PostgreSQL 함수 형태로 변환
+- **Oracle Source**:
+  ```java
+  sb.append(" INSERT INTO USERS (ID) VALUES (USER_SEQ.NEXTVAL) \n ");
+  ```
+- **PostgreSQL Result**:
+  ```sql
+  INSERT INTO USERS (ID) VALUES (NEXTVAL('USER_SEQ')) 
+  ```
+
+### 8. 결과 건수 제한 (ROWNUM)
+- **기능**: `WHERE ROWNUM` 구문을 `LIMIT`로 변환
+- **Oracle Source**:
+  ```java
+  sb.append(" SELECT * FROM EMP WHERE ROWNUM <= 10 \n ");
+  ```
+- **PostgreSQL Result**:
+  ```sql
+  SELECT * FROM EMP LIMIT 10 
+  ```
+
+### 9. 집합 연산자 (MINUS)
+- **기능**: 두 결과 셋의 차집합 연산자 변환
+- **Oracle Source**:
+  ```java
+  sb.append(" SELECT ID FROM TABLE_A MINUS SELECT ID FROM TABLE_B \n ");
+  ```
+- **PostgreSQL Result**:
+  ```sql
+  SELECT ID FROM TABLE_A EXCEPT SELECT ID FROM TABLE_B 
+  ```
+
+### 10. 바이트 및 LOB 처리
+- **기능**: `LENGTHB`, `SUBSTRB`, `DBMS_LOB` 처리
+- **Oracle Source**:
+  ```java
+  sb.append(" SELECT LENGTHB(CONTENT) as bytes \n ");
+  sb.append("      , DBMS_LOB.SUBSTR(CLOB_COL, 4000, 1) as txt \n ");
+  ```
+- **PostgreSQL Result**:
+  ```sql
+  SELECT OCTET_LENGTH(CONTENT) as bytes 
+       , SUBSTRING(CLOB_COL, 1, 4000) as txt 
+  ```
+
+---
+
+## 📂 파일 구조
+- `oracle_to_pgsql_converter.html`: UI 인터페이스
+- `oracle_to_pgsql.js`: 변환 핵심 라이브러리 (jquery.min.js 스타일)
+- `README.md`: 본 통합 가이드 문서

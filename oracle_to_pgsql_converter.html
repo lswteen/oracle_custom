@@ -226,179 +226,29 @@
 
     <div id="notif" class="notif">Copied to clipboard!</div>
 
+    <script src="oracle_to_pgsql.js"></script>
     <script>
         const $ = id => document.getElementById(id);
-
-        // --- SQL Conversion Core ---
-        const OracleToPG = {
-            transform: function (sql) {
-                if (!sql) return "";
-                let res = sql;
-
-                // 1. Basic Functions
-                res = res.replace(/NVL\(/gi, 'COALESCE(');
-                res = res.replace(/SYSDATE/gi, 'CURRENT_TIMESTAMP');
-                res = res.replace(/SYSTIMESTAMP/gi, 'CURRENT_TIMESTAMP');
-
-                // 2. NVL2 Support: NVL2(a, b, c) -> CASE WHEN a IS NOT NULL THEN b ELSE c END
-                res = res.replace(/NVL2\(([^,]+),\s*([^,]+),\s*([^)]+)\)/gi, (match, p1, p2, p3) => {
-                    return `CASE WHEN ${p1.trim()} IS NOT NULL THEN ${p2.trim()} ELSE ${p3.trim()} END`;
-                });
-
-                // 3. Dual Removal
-                res = res.replace(/FROM\s+DUAL/gi, '/* FROM DUAL */');
-                res = res.replace(/SELECT\s+(.*?)\s+FROM\s+DUAL/gi, 'SELECT $1');
-
-                // 4. Decode (Dynamic)
-                // Recursive replacement for DECODE
-                const decodeRegex = /DECODE\(([^,]+),\s*([^)]+)\)/gi;
-                while (res.match(decodeRegex)) {
-                    res = res.replace(decodeRegex, (match, val, args) => {
-                        const parts = splitCsv(args);
-                        let caseStmt = `CASE WHEN ${val.trim()}`;
-                        for (let i = 0; i < parts.length - 1; i += 2) {
-                            if (i + 1 < parts.length) {
-                                caseStmt += ` = ${parts[i].trim()} THEN ${parts[i + 1].trim()}`;
-                            }
-                        }
-                        if (parts.length % 2 === 1) {
-                            caseStmt += ` ELSE ${parts[parts.length - 1].trim()}`;
-                        }
-                        caseStmt += ` END`;
-                        return caseStmt;
-                    });
-                }
-
-                // 5. DB Link Removal (@dblink)
-                res = res.replace(/([a-zA-Z0-9_$]+)@([a-zA-Z0-9_$]+)/gi, '$1 /* @$2 */');
-
-                // 6. Outer Join (+) -> LEFT JOIN Reconstruction Hint
-                // Attempt simple pattern: table1 alias1, table2 alias2 WHERE alias1.id = alias2.id(+)
-                // Since full cross-line parsing is risky, we provide a clearer "ANSI Reconstruction" comment
-                // and a helper specifically for moving conditions to ON clauses.
-                res = res.replace(/([a-zA-Z0-9_.]+)\s*=\s*([a-zA-Z0-9_.]+)\s*\(\+\)/g, (match, p1, p2) => {
-                    return `/* ANSI: JOIN ${p2.split('.')[0]} ON ${p1} = ${p2} */ ${p1} = ${p2}`;
-                });
-                res = res.replace(/([a-zA-Z0-9_.]+)\s*\(\+\)\s*=\s*([a-zA-Z0-9_.]+)/g, (match, p1, p2) => {
-                    return `/* ANSI: LEFT JOIN ${p1.split('.')[0]} ON ${p1} = ${p2} */ ${p1} = ${p2}`;
-                });
-                res = res.replace(/\(\+\)/g, '/* (+) OUTER JOIN */');
-
-                // 7. TO_CHAR / Date Formatting
-                res = res.replace(/TO_CHAR\(([^,]+),\s*'YYYYMMDD'\)/gi, "TO_CHAR($1, 'YYYYMMDD')");
-                res = res.replace(/TO_CHAR\(([^,]+),\s*'YYYY-MM-DD HH24:MI:SS'\)/gi, "TO_CHAR($1, 'YYYY-MM-DD HH24:MI:SS')");
-                res = res.replace(/TO_DATE\(([^,]+),\s*'YYYYMMDD'\)/gi, "CAST($1 AS DATE)");
-
-                // 8. Trunc
-                res = res.replace(/TRUNC\(CURRENT_TIMESTAMP\)/gi, 'CURRENT_DATE');
-                res = res.replace(/TRUNC\(([^,)]+)\)/gi, 'DATE_TRUNC(\'day\', $1)');
-
-                // 9. Instr / Substr
-                res = res.replace(/INSTR\(/gi, 'STRPOS(');
-                res = res.replace(/SUBSTR\(/gi, 'SUBSTRING(');
-
-                // 10. Rownum to Limit
-                res = res.replace(/WHERE\s+ROWNUM\s*<=\s*(\d+)/gi, 'LIMIT $1');
-                res = res.replace(/AND\s+ROWNUM\s*<=\s*(\d+)/gi, 'LIMIT $1');
-
-                return res;
-            }
-        };
-
-        // Helper to split CSV but respect nested parens
-        function splitCsv(str) {
-            const results = [];
-            let current = "";
-            let depth = 0;
-            for (let char of str) {
-                if (char === ',' && depth === 0) {
-                    results.push(current);
-                    current = "";
-                } else {
-                    if (char === '(') depth++;
-                    if (char === ')') depth--;
-                    current += char;
-                }
-            }
-            results.push(current);
-            return results;
-        }
-
-        // --- Extraction & Wrapping ---
-        const Parser = {
-            extract: (src) => {
-                const lines = src.split('\n');
-                let result = [];
-                lines.forEach(line => {
-                    // Extract SQL content between double quotes
-                    const match = /"(.*?)"/.exec(line);
-                    if (match) {
-                        result.push(match[1].replace(/\\n/g, '').replace(/\\r/g, '').replace(/\\"/g, '"').trimEnd());
-                    }
-                });
-                return result.join('\n');
-            },
-
-            detectStyle: (src) => {
-                const lines = src.split('\n');
-                let vName = "sbSql";
-                let type = "append"; // default
-
-                for (let line of lines) {
-                    const trimmed = line.trim();
-                    if (!trimmed) continue;
-
-                    // Match sb.append(" style
-                    const appendMatch = /([a-zA-Z0-9_$]+)\.append\s*\(/i.exec(trimmed);
-                    if (appendMatch) {
-                        return { vName: appendMatch[1], type: "append" };
-                    }
-
-                    // Match variable += " style
-                    const plusAssignMatch = /([a-zA-Z0-9_$]+)\s*\+=\s*"/i.exec(trimmed);
-                    if (plusAssignMatch) {
-                        return { vName: plusAssignMatch[1], type: "plusAssign" };
-                    }
-
-                    // Match variable = " style
-                    const assignMatch = /([a-zA-Z0-9_$]+)\s*=\s*"/i.exec(trimmed);
-                    if (assignMatch) {
-                        return { vName: assignMatch[1], type: "assign" };
-                    }
-                }
-                return { vName, type };
-            },
-
-            wrap: (pg, style) => {
-                const lines = pg.split('\n');
-                return lines.map((l, i) => {
-                    const sql = l.trimEnd();
-                    if (style.type === 'append') {
-                        return `${style.vName}.append("${sql} \\n ");`;
-                    } else if (style.type === 'plusAssign') {
-                        return `${style.vName} += "${sql} \\n ";`;
-                    } else {
-                        return (i === 0 ? `${style.vName} = "` : `    + "`) + `${sql} \\n "` + (i === lines.length - 1 ? ";" : "");
-                    }
-                }).join('\n');
-            }
-        };
 
         // --- UI Logic ---
         $('javaIn').addEventListener('input', () => {
             const val = $('javaIn').value;
-            if (!val) { $('oracleOut').value = ''; return; }
-            $('oracleOut').value = Parser.extract(val);
+            if (!val) {
+                $('oracleOut').value = '';
+                return;
+            }
+            $('oracleOut').value = OracleToPG.extract(val);
         });
 
         function convert() {
             const ora = $('oracleOut').value;
             if (!ora) return;
+
             const pg = OracleToPG.transform(ora);
             $('pgOut').value = pg;
 
-            const style = Parser.detectStyle($('javaIn').value);
-            $('finalRes').value = Parser.wrap(pg, style);
+            const style = OracleToPG.detectStyle($('javaIn').value);
+            $('finalRes').value = OracleToPG.wrap(pg, style);
         }
 
         function copy(id) {
@@ -408,7 +258,9 @@
             showNotif();
         }
 
-        function copyResult() { copy('finalRes'); }
+        function copyResult() {
+            copy('finalRes');
+        }
 
         function clearAll() {
             $('javaIn').value = '';
