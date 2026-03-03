@@ -177,9 +177,25 @@
 <body>
     <header>
         <div class="logo">ORACLE ➜ POSTGRESQL</div>
-        <div style="display: flex; gap: 8px;">
-            <button class="btn btn-ghost" onclick="clearAll()">Clear All</button>
-            <button class="btn btn-primary" onclick="copyResult()">Final Copy</button>
+        <div style="display: flex; align-items: center; gap: 16px;">
+            <div
+                style="display: flex; align-items: center; gap: 8px; background: rgba(255,255,255,0.05); padding: 4px 12px; border-radius: 20px; border: 1px solid var(--border);">
+                <span
+                    style="font-size: 10px; color: var(--text-muted); font-weight: 700; text-transform: uppercase;">Date
+                    Format:</span>
+                <select id="dateFormat"
+                    style="background: transparent; border: none; color: var(--accent); font-size: 11px; font-weight: 600; cursor: pointer; outline: none;">
+                    <option value="YYYY-MM-DD" style="background: var(--bg-deep);">YYYY-MM-DD</option>
+                    <option value="YYYYMMDD" style="background: var(--bg-deep);">YYYYMMDD</option>
+                    <option value="YYYY/MM/DD" style="background: var(--bg-deep);">YYYY/MM/DD</option>
+                    <option value="YYYY-MM-DD HH24:MI:SS" style="background: var(--bg-deep);">YYYY-MM-DD HH24:MI:SS
+                    </option>
+                </select>
+            </div>
+            <div style="display: flex; gap: 8px;">
+                <button class="btn btn-ghost" onclick="clearAll()">Clear All</button>
+                <button class="btn btn-primary" onclick="copyResult()">Final Copy</button>
+            </div>
         </div>
     </header>
 
@@ -217,10 +233,10 @@
         <!-- Result Panel -->
         <div class="panel">
             <div class="panel-header">
-                <span>4. Final Java Wrapped</span>
+                <span>4. Final Java (Structure Preserved)</span>
                 <button class="btn btn-ghost" onclick="copy('finalRes')">Copy</button>
             </div>
-            <textarea id="finalRes" readonly placeholder="Result code to paste back into Java..."></textarea>
+            <textarea id="finalRes" readonly placeholder="Result code with original structure preserved..."></textarea>
         </div>
     </div>
 
@@ -242,13 +258,15 @@
 
         function convert() {
             const ora = $('oracleOut').value;
+            const javaIn = $('javaIn').value;
             if (!ora) return;
 
-            const pg = OracleToPG.transform(ora);
+            const format = $('dateFormat').value;
+            const pg = OracleToPG.transform(ora, format);
             $('pgOut').value = pg;
 
-            const style = OracleToPG.detectStyle($('javaIn').value);
-            $('finalRes').value = OracleToPG.wrap(pg, style);
+            // Use smartReplace to keep the original Java structure (comments, etc.)
+            $('finalRes').value = OracleToPG.smartReplace(javaIn, pg);
         }
 
         function copy(id) {
@@ -274,6 +292,7 @@
             n.classList.add('show');
             setTimeout(() => n.classList.remove('show'), 2000);
         }
+
     </script>
 </body>
 
