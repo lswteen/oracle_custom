@@ -85,24 +85,36 @@ const OracleToPG = (function () {
     }
 
     function processSingleQueryJoin(sql) {
-        const hasPlus = /\(\+\)/i.test(sql);
-        const fromPart = sql.split(/FROM\s+/i)[1]?.split(/WHERE\s+|GROUP BY|ORDER BY|HAVING|$|;/i)[0];
-        const hasComma = fromPart?.includes(',');
+        if (!sql) return "";
 
-        if (!hasPlus && !hasComma) return sql;
+        const fromIdx = sql.search(/\bFROM\b/i);
+        if (fromIdx === -1) return sql;
 
-        const fromRegex = /FROM\s+([\s\S]+?)(?=\s+WHERE|\s+GROUP BY|\s+ORDER BY|\s+HAVING|$|;)/i;
-        const whereRegex = /WHERE\s+([\s\S]+?)(?=\s+GROUP BY|\s+ORDER BY|\s+HAVING|$|;)/i;
+        // Extract Footer (GROUP BY, ORDER BY, etc.) first to avoid interference
+        let footerIdx = sql.search(/\b(GROUP\s+BY|ORDER\s+BY|HAVING)\b/i);
+        let footer = "";
+        let workingSql = sql;
+        if (footerIdx !== -1) {
+            footer = sql.substring(footerIdx);
+            workingSql = sql.substring(0, footerIdx);
+        }
 
-        const fromMatch = fromRegex.exec(sql);
-        if (!fromMatch) return sql;
+        // Extract WHERE
+        let whereIdx = workingSql.search(/\bWHERE\b/i);
+        let whereClause = "";
+        let fromClause = "";
+        const selectSegment = workingSql.substring(0, fromIdx + 4);
 
-        const fromClause = fromMatch[1];
-        const whereMatch = whereRegex.exec(sql);
-        const whereClause = whereMatch ? whereMatch[1] : "";
+        if (whereIdx !== -1) {
+            fromClause = workingSql.substring(fromIdx + 4, whereIdx).trim();
+            whereClause = workingSql.substring(whereIdx + 5).trim();
+        } else {
+            fromClause = workingSql.substring(fromIdx + 4).trim();
+        }
 
         const tables = fromClause.split(',').map(t => t.trim()).filter(Boolean);
-        if (tables.length < 2) return sql;
+        const hasPlus = /\(\+\)/i.test(whereClause);
+        if (tables.length < 2 && !hasPlus) return sql;
 
         const conditions = whereClause ? whereClause.split(/\s+AND\s+/i).map(c => c.trim()).filter(Boolean) : [];
 
@@ -124,7 +136,6 @@ const OracleToPG = (function () {
             const aliases = (cond.match(/\b[a-zA-Z0-9_$]+\.[a-zA-Z0-9_$]+\b/g) || [])
                 .map(a => a.split('.')[0])
                 .filter((v, i, a) => a.indexOf(v) === i);
-
 
             otherWhere.push({ cond: cleanCond, isJoin: isJoin, aliases: aliases });
         });
@@ -186,7 +197,6 @@ const OracleToPG = (function () {
                             if (ow.cond.trim() === '1 = 1' || ow.cond.trim() === '1=1') continue;
 
                             let extraCond = otherWhere.splice(j, 1)[0].cond;
-                            // Also swap for extra conditions if they are joins to 's'
                             if (extraCond.includes('=') && ow.aliases.length === 2 && !extraCond.includes('CASE')) {
                                 const parts = extraCond.split('=');
                                 if (parts.length === 2) {
@@ -228,13 +238,15 @@ const OracleToPG = (function () {
         });
 
         const finalConditions = otherWhere.map(ow => ow.cond);
-        let newSql = sql.replace(fromClause, ' ' + newFrom + ' ');
+        let result = selectSegment + ' ' + newFrom;
         if (finalConditions.length > 0) {
-            newSql = newSql.replace(whereClause, ' ' + finalConditions.join('\n   AND ') + ' ');
+            result += '\n WHERE ' + finalConditions.join('\n   AND ');
         } else {
-            newSql = newSql.replace(whereClause, ' 1 = 1 ');
+            result += '\n WHERE 1 = 1 ';
         }
-        return newSql;
+        if (footer) result += '\n' + footer;
+
+        return result;
     }
 
     function getTableAlias(t) {

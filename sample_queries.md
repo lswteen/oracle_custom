@@ -237,7 +237,7 @@ SELECT y.gubun_code
      , x.cli_system_trx_id
      , x.trx_send_time
 FROM eecs.afbs_cms_header_t /* @xpecs01 */ x
- JOIN eecs.afbs_cms_body_0100_700_t /* @xpecs01 */ y ON x.trx_send_date = y.trx_send_date
+  JOIN eecs.afbs_cms_body_0100_700_t /* @xpecs01 */ y ON x.trx_send_date = y.trx_send_date
 WHERE x.trx_send_date = :DATA_CREATE_DATE
    AND x.cli_system_trx_id LIKE 'V%'
    AND x.sender_id = y.sender_id
@@ -247,9 +247,60 @@ SELECT y.gubun_code
      , x.cli_system_trx_id
      , x.trx_send_time
 FROM eecs.afbs_cms_header_t /* @xpecs01 */ x
- JOIN eecs.afbs_cms_body_0107_100_t /* @xpecs01 */ y ON x.trx_send_date = y.trx_send_date
+  JOIN eecs.afbs_cms_body_0107_100_t /* @xpecs01 */ y ON x.trx_send_date = y.trx_send_date
 WHERE x.trx_send_date = :DATA_CREATE_DATE
    AND x.cli_system_trx_id LIKE 'V%'
    AND x.sender_id = y.sender_id
    AND x.gate_trx_id = y.gate_trx_id
+```
+
+## 4. Complex Joins with ORDER BY (Fix for mixed clauses)
+
+### Oracle Source
+```sql
+SELECT C.CMS_RESULT_CODE, D.CMS_COMMON_AREA_NAME 
+FROM GAS.CMS_TRANS_LIST_T C 
+   , GAS.CMS_COMMON_AREA_T D 
+   , GAS.COMMON_DETAIL_CODE_T E 
+   , GAS.BANK_ACCT_T F 
+WHERE C.CMS_COMMON_AREA_SEQ = D.CMS_COMMON_AREA_SEQ 
+AND C.BANK_ACCT_ID = F.BANK_ACCT_ID 
+AND E.COMMON_CODE (+) = '0021' 
+AND F.USE_FLAG = '1' 
+AND E.COMMON_DETAIL_CODE (+) = F.BANK_ACCT_TYPE_CODE 
+ORDER BY C.PAYMENT_ACCOUNT_BANK_CODE 
+       , C.PAYMENT_ACCOUNT_NO 
+```
+
+### Java Source (StringBuffer)
+```java
+sbSql.append(" SELECT C.CMS_RESULT_CODE, D.CMS_COMMON_AREA_NAME \n");
+sbSql.append(" FROM GAS.CMS_TRANS_LIST_T C \n");
+sbSql.append("    , GAS.CMS_COMMON_AREA_T D \n");
+sbSql.append("    , GAS.COMMON_DETAIL_CODE_T E \n");
+sbSql.append("    , GAS.BANK_ACCT_T F \n");
+sbSql.append(" WHERE C.CMS_COMMON_AREA_SEQ = D.CMS_COMMON_AREA_SEQ \n");
+sbSql.append(" AND C.BANK_ACCT_ID = F.BANK_ACCT_ID \n");
+sbSql.append(" AND E.COMMON_CODE (+) = '0021' \n");
+sbSql.append(" AND F.USE_FLAG = '1' \n");
+sbSql.append(" AND E.COMMON_DETAIL_CODE (+) = F.BANK_ACCT_TYPE_CODE \n");
+sbSql.append(" ORDER BY C.PAYMENT_ACCOUNT_BANK_CODE \n");
+sbSql.append("        , C.PAYMENT_ACCOUNT_NO \n");
+```
+
+### PG SQL (Transformed)
+```sql
+ SELECT C.CMS_RESULT_CODE, D.CMS_COMMON_AREA_NAME 
+ FROM GAS.CMS_TRANS_LIST_T C
+ JOIN GAS.CMS_COMMON_AREA_T D
+  ON C.CMS_COMMON_AREA_SEQ = D.CMS_COMMON_AREA_SEQ
+ JOIN GAS.BANK_ACCT_T F
+  ON C.BANK_ACCT_ID = F.BANK_ACCT_ID
+ AND F.USE_FLAG = '1'
+ LEFT JOIN GAS.COMMON_DETAIL_CODE_T E
+  ON F.BANK_ACCT_TYPE_CODE = E.COMMON_DETAIL_CODE
+ AND E.COMMON_CODE= '0021'
+ WHERE 1 = 1 
+ORDER BY C.PAYMENT_ACCOUNT_BANK_CODE 
+        , C.PAYMENT_ACCOUNT_NO 
 ```
