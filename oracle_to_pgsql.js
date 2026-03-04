@@ -1,6 +1,6 @@
 /**
  * OracleToPG Converter Utility
- * Version: 1.0.0
+ * Version: 1.0.1
  * Description: Utility to convert Oracle SQL to PostgreSQL and extract SQL from Java source.
  */
 
@@ -8,97 +8,72 @@ const OracleToPG = (function () {
     'use strict';
 
     // --- Core SQL Conversion ---
-    const transform = function (sql, dateFormat = 'YYYY-MM-DD') {
+    function transform(sql, dateFormat = 'YYYY-MM-DD') {
         if (!sql) return "";
-        let res = sql;
 
-        // 1. Basic Functions
-        res = res.replace(/NVL\(/gi, 'COALESCE(');
-        res = res.replace(/SYSDATE/gi, 'CURRENT_TIMESTAMP');
-        res = res.replace(/SYSTIMESTAMP/gi, 'CURRENT_TIMESTAMP');
+        let result = sql;
 
-        // 2. NVL2 Support
-        res = res.replace(/NVL2\(([^,]+),\s*([^,]+),\s*([^)]+)\)/gi, (match, p1, p2, p3) => {
-            return `CASE WHEN ${p1.trim()} IS NOT NULL THEN ${p2.trim()} ELSE ${p3.trim()} END`;
+        // 1. Basic Keyword Cleanup
+        result = result.replace(/\bNVL\b/gi, 'COALESCE');
+        result = result.replace(/\bSYSDATE\b/gi, 'CURRENT_TIMESTAMP');
+
+        // 2. DECODE to CASE (Vertical Formatting)
+        const decodeRegex = /DECODE\s*\(([\s\S]+?)\)/gi;
+        result = result.replace(decodeRegex, (match, p1) => {
+            const args = splitCsv(p1);
+            if (args.length < 3) return match;
+
+            const col = args[0].trim();
+            let caseStr = "CASE\n";
+            for (let i = 1; i < args.length - 1; i += 2) {
+                const val = args[i].trim();
+                const res = args[i + 1].trim();
+                caseStr += `     WHEN ${col} = ${val} THEN ${res}\n`;
+            }
+
+            if (args.length % 2 === 0) {
+                caseStr += `     ELSE ${args[args.length - 1].trim()}\n`;
+            }
+            caseStr += " END";
+            return caseStr;
         });
 
-        // 3. Dual Removal
-        res = res.replace(/SELECT\s+(.*?)FROM\s+DUAL/gi, 'SELECT $1 /* Dual Removed */ ');
-        res = res.replace(/FROM\s+DUAL/gi, '/* FROM DUAL removed */');
+        // 3. NVL2 (Vertical Formatting)
+        result = result.replace(/NVL2\s*\(([\s\S]+?)\)/gi, (match, p1) => {
+            const args = splitCsv(p1);
+            if (args.length !== 3) return match;
+            return `CASE\n     WHEN ${args[0].trim()} IS NOT NULL THEN ${args[1].trim()}\n     ELSE ${args[2].trim()}\n END`;
+        });
 
-        // 4. Decode (Dynamic & Recursive)
-        const decodeRegex = /DECODE\(([^,]+),\s*((?:[^()]|\([^)]*\))*)\)/gi;
-        while (res.match(decodeRegex)) {
-            res = res.replace(decodeRegex, (match, val, args) => {
-                const parts = splitCsv(args);
-                let caseStmt = `CASE WHEN ${val.trim()}`;
-                for (let i = 0; i < parts.length - 1; i += 2) {
-                    if (i + 1 < parts.length) {
-                        caseStmt += ` = ${parts[i].trim()} THEN ${parts[i + 1].trim()}`;
-                    }
-                }
-                if (parts.length % 2 === 1) {
-                    caseStmt += ` ELSE ${parts[parts.length - 1].trim()}`;
-                }
-                caseStmt += ` END`;
-                return caseStmt;
+        // 4. COALESCE (Vertical Formatting for complex nested cases)
+        // Match COALESCE followed by a CASE to trigger vertical split and wrap CASE in parentheses with specific layout
+        result = result.replace(/COALESCE\s*\(\s*(CASE[\s\S]+?END)\s*,\s*(.*?)\s*\)/gi, (match, caseBody, fallback) => {
+            return `COALESCE((\n${caseBody}\n), ${fallback})`;
+        });
+
+        // 4. TO_DATE
+        result = result.replace(/TO_DATE\s*\(\s*('.*?')\s*,\s*('.*?')\s*\)/gi, (match, val, fmt) => {
+            return `TO_TIMESTAMP(${val}, ${fmt})`;
+        });
+
+        // 5. Dual removal
+        result = result.replace(/\s+FROM\s+DUAL/gi, '');
+
+        // 6. OUTER JOIN (+) -> ANSI JOIN
+        result = convertToAnsiJoin(result);
+
+        // EXTRA: Remove table aliases from UPDATE SET
+        if (/UPDATE\s+(\w+)\s+(\w+)\s+SET/i.test(result)) {
+            result = result.replace(/UPDATE\s+(\w+)\s+(\w+)\s+SET\s+([\s\S]+?)\s+WHERE/i, (match, table, alias, sets) => {
+                const cleanSets = sets.replace(new RegExp(`${alias}\\.`, 'g'), '');
+                return `UPDATE ${table} ${alias} SET ${cleanSets} WHERE`;
             });
         }
 
-        // 5. DB Link Removal
-        res = res.replace(/([a-zA-Z0-9_$]+)@([a-zA-Z0-9_$]+)/gi, '$1 /* @$2 */');
+        return result;
+    }
 
-        // 6. Join Logic (Convert Oracle comma joins with (+) to ANSI JOIN)
-        res = convertToAnsiJoin(res);
-
-        // 7. TO_CHAR / Date Formatting
-        const datePattern = /TO_CHAR\(([^,]+),\s*'([^']+)'\)/gi;
-        res = res.replace(datePattern, (match, p1, p2) => {
-            return `TO_CHAR(${p1}, '${dateFormat}')`;
-        });
-        res = res.replace(/TO_DATE\(([^,]+),\s*'[^']+'\)/gi, "CAST($1 AS DATE)");
-
-        // 8. Advanced Date Functions
-        res = res.replace(/ADD_MONTHS\(([^,]+),\s*([^)]+)\)/gi, '($1 + INTERVAL \'$2 month\')');
-        res = res.replace(/LAST_DAY\(([^)]+)\)/gi, '(DATE_TRUNC(\'MONTH\', $1) + INTERVAL \'1 MONTH - 1 day\')::DATE');
-        res = res.replace(/MONTHS_BETWEEN\(([^,]+),\s*([^)]+)\)/gi, '(EXTRACT(YEAR FROM AGE($1, $2)) * 12 + EXTRACT(MONTH FROM AGE($1, $2)))');
-
-        // 9. Trunc
-        res = res.replace(/TRUNC\(CURRENT_TIMESTAMP\)/gi, 'CURRENT_DATE');
-        res = res.replace(/TRUNC\(([^,)]+)\)/gi, 'DATE_TRUNC(\'day\', $1)');
-        res = res.replace(/TRUNC\(([^,]+),\s*(\d+)\)/gi, 'TRUNC($1, $2)');
-
-        // 10. Instr / Substr / Length
-        res = res.replace(/INSTR\(/gi, 'STRPOS(');
-        res = res.replace(/SUBSTR\(/gi, 'SUBSTRING(');
-        res = res.replace(/LENGTHB\(([^)]+)\)/gi, 'OCTET_LENGTH($1)');
-        res = res.replace(/SUBSTRB\(([^,]+),\s*([^,]+),\s*([^)]+)\)/gi, 'SUBSTRING($1::BYTEA, $2, $3)::TEXT');
-
-        // 11. Sequences
-        res = res.replace(/([a-zA-Z0-9_$]+)\.NEXTVAL/gi, "NEXTVAL('$1')");
-        res = res.replace(/([a-zA-Z0-9_$]+)\.CURRVAL/gi, "CURRVAL('$1')");
-
-        // 12. Set Operators
-        res = res.replace(/MINUS/gi, 'EXCEPT');
-
-        // 13. Rownum to Limit
-        res = res.replace(/WHERE\s+ROWNUM\s*<=\s*(\d+)/gi, 'LIMIT $1');
-        res = res.replace(/AND\s+ROWNUM\s*<=\s*(\d+)/gi, 'LIMIT $1');
-        res = res.replace(/\bROWNUM\b/gi, '/* ROWNUM -> ROW_NUMBER() or LIMIT */');
-
-        // 14. Others
-        res = res.replace(/\bUSER\b/gi, 'CURRENT_USER');
-        res = res.replace(/\bUID\b/gi, 'SESSION_USER');
-        res = res.replace(/DBMS_LOB\.SUBSTR\(([^,]+),\s*([^,]+),\s*([^)]+)\)/gi, 'SUBSTRING($1, $3, $2)');
-
-        return res;
-    };
-
-    /**
-     * Converts Oracle comma-separated joins with (+) to ANSI JOIN syntax.
-     */
     function convertToAnsiJoin(sql) {
-        // Handle UNION/UNION ALL by processing each segment separately
         if (/\bUNION\b/i.test(sql)) {
             const segments = sql.split(/(\bUNION\b(?:\s+ALL)?)/i);
             return segments.map(seg => {
@@ -109,16 +84,13 @@ const OracleToPG = (function () {
         return processSingleQueryJoin(sql);
     }
 
-    /**
-     * Internal processor for a single SELECT/UPDATE/DELETE block.
-     */
     function processSingleQueryJoin(sql) {
-        // Basic check for join markers or multiple tables
         const hasPlus = /\(\+\)/i.test(sql);
-        const hasComma = sql.split(/FROM\s+/i)[1]?.split(/WHERE\s+/i)[0]?.includes(',');
+        const fromPart = sql.split(/FROM\s+/i)[1]?.split(/WHERE\s+|GROUP BY|ORDER BY|HAVING|$|;/i)[0];
+        const hasComma = fromPart?.includes(',');
+
         if (!hasPlus && !hasComma) return sql;
 
-        // Extract FROM and WHERE clauses carefully
         const fromRegex = /FROM\s+([\s\S]+?)(?=\s+WHERE|\s+GROUP BY|\s+ORDER BY|\s+HAVING|$|;)/i;
         const whereRegex = /WHERE\s+([\s\S]+?)(?=\s+GROUP BY|\s+ORDER BY|\s+HAVING|$|;)/i;
 
@@ -129,11 +101,9 @@ const OracleToPG = (function () {
         const whereMatch = whereRegex.exec(sql);
         const whereClause = whereMatch ? whereMatch[1] : "";
 
-        // Parse tables
         const tables = fromClause.split(',').map(t => t.trim()).filter(Boolean);
         if (tables.length < 2) return sql;
 
-        // Parse conditions
         const conditions = whereClause ? whereClause.split(/\s+AND\s+/i).map(c => c.trim()).filter(Boolean) : [];
 
         const joinStates = tables.map(t => {
@@ -144,123 +114,109 @@ const OracleToPG = (function () {
             return { raw: cleanT, alias: alias, joined: false, type: 'JOIN', on: [], comment: comment };
         });
 
-        // First table is base
         joinStates[0].joined = true;
         const processed = new Set([joinStates[0].alias]);
         const otherWhere = [];
 
-        // Distribute conditions
         conditions.forEach(cond => {
-            const clean = cond.replace(/\(\+\)/gi, '');
-            const condHasPlus = /\(\+\)/i.test(cond);
+            const isJoin = /\(\+\)/.test(cond);
+            let cleanCond = cond.replace(/\s*\(\+\)\s*/g, '');
+            const aliases = (cond.match(/\b[a-zA-Z0-9_$]+\.[a-zA-Z0-9_$]+\b/g) || [])
+                .map(a => a.split('.')[0])
+                .filter((v, i, a) => a.indexOf(v) === i);
 
-            // Find aliases
-            const aliases = [];
-            const aliasMatches = cond.matchAll(/\b([a-zA-Z0-9_$]+)\.[a-zA-Z0-9_$]+\b/g);
-            for (const am of aliasMatches) {
-                if (!aliases.includes(am[1])) aliases.push(am[1]);
-            }
 
-            if (condHasPlus) {
-                const plusAliasMatch = /\b([a-zA-Z0-9_$]+)\.[a-zA-Z0-9_$]+\s*\(\+\)/i.exec(cond);
-                if (plusAliasMatch) {
-                    const plusAlias = plusAliasMatch[1];
-                    const target = joinStates.find((s, idx) => s.alias === plusAlias && idx > 0);
-                    if (target) {
-                        target.type = 'LEFT JOIN';
-                        target.on.push(clean);
-                        return;
-                    }
-                }
-            } else if (aliases.length >= 2) {
-                otherWhere.push({ cond: clean, aliases: aliases, isJoin: true });
-                return;
-            }
-
-            otherWhere.push({ cond: clean, aliases: aliases, isJoin: false });
+            otherWhere.push({ cond: cleanCond, isJoin: isJoin, aliases: aliases });
         });
 
-        let newFrom = joinStates[0].raw;
         let changed = true;
+        let newFrom = joinStates[0].raw + (joinStates[0].comment ? ' ' + joinStates[0].comment : '');
+
         while (changed) {
             changed = false;
             for (let i = 1; i < joinStates.length; i++) {
                 const s = joinStates[i];
                 if (s.joined) continue;
 
-                if (s.on.length > 0) {
-                    const canJoin = s.on.some(oc => {
-                        const ams = oc.matchAll(/\b([a-zA-Z0-9_$]+)\.\b/g);
-                        for (const am of ams) {
-                            if (am[1] !== s.alias && processed.has(am[1])) return true;
-                        }
-                        return false;
-                    });
-                    if (canJoin) {
-                        s.joined = true;
-                        processed.add(s.alias);
-                        // Pull in any static filters for any already processed tables (including driving table)
-                        for (let j = 0; j < otherWhere.length; j++) {
-                            const ow = otherWhere[j];
-                            if (!ow.isJoin && ow.aliases.every(a => processed.has(a))) {
-                                const cond = otherWhere[j].cond;
-                                if (cond.trim() === '1 = 1' || cond.trim() === '1=1') continue;
-                                s.on.push(otherWhere.splice(j, 1)[0].cond);
-                                j--;
-                            }
-                        }
-                        const sortedOn = s.on.sort((a, b) => {
-                            const aIsJoin = (a.match(/\b[a-zA-Z0-9_$]+\.[a-zA-Z0-9_$]+\b/g) || []).length >= 2;
-                            const bIsJoin = (b.match(/\b[a-zA-Z0-9_$]+\.[a-zA-Z0-9_$]+\b/g) || []).length >= 2;
-                            if (aIsJoin && !bIsJoin) return -1;
-                            if (!aIsJoin && bIsJoin) return 1;
-                            return 0;
-                        });
-                        newFrom += `\n ${s.type} ${s.raw} ON ${sortedOn.join(' AND ')}${s.comment ? ' ' + s.comment : ''}`;
-                        changed = true;
-                        break;
-                    }
-                }
-
-                const innerIdx = otherWhere.findIndex(ow => {
+                // Path 1: LEFT JOIN (+)
+                let idx = otherWhere.findIndex(ow => {
                     if (!ow.isJoin) return false;
                     const hasS = ow.aliases.includes(s.alias);
                     const hasOthers = ow.aliases.some(a => a !== s.alias && processed.has(a));
                     return hasS && hasOthers;
                 });
+                let jType = 'LEFT JOIN';
 
-                if (innerIdx !== -1) {
-                    const ow = otherWhere.splice(innerIdx, 1)[0];
-                    s.joined = true;
-                    s.on.push(ow.cond);
-                    processed.add(s.alias);
+                // Path 2: INNER JOIN
+                if (idx === -1) {
+                    idx = otherWhere.findIndex(ow => {
+                        if (ow.isJoin) return false;
+                        const hasS = ow.aliases.includes(s.alias);
+                        const hasOthers = ow.aliases.some(a => a !== s.alias && processed.has(a));
+                        return hasS && hasOthers;
+                    });
+                    jType = 'JOIN';
+                }
 
-                    // Pull in any static filters for any already processed tables (including driving table)
-                    for (let j = 0; j < otherWhere.length; j++) {
-                        const condObj = otherWhere[j];
-                        if (!condObj.isJoin && condObj.aliases.every(a => processed.has(a))) {
-                            if (condObj.cond.trim() === '1 = 1' || condObj.cond.trim() === '1=1') continue;
-                            s.on.push(otherWhere.splice(j, 1)[0].cond);
-                            j--;
+                if (idx !== -1) {
+                    const matched = otherWhere.splice(idx, 1)[0];
+                    let finalCond = matched.cond;
+
+                    // Swap if needed: BaseTable = NewTable
+                    if (finalCond.includes('=') && matched.aliases.length === 2 && !finalCond.includes('CASE')) {
+                        const parts = finalCond.split('=');
+                        if (parts.length === 2) {
+                            const lhs = parts[0].trim();
+                            const rhs = parts[1].trim();
+                            const lhsAliasMatch = /^([a-zA-Z0-9_$]+)\./.exec(lhs);
+                            if (lhsAliasMatch && lhsAliasMatch[1] === s.alias) {
+                                finalCond = `${rhs} = ${lhs}`;
+                            }
                         }
                     }
 
-                    // Also pull in any multi-alias joins that are now fully satisfied
+                    s.joined = true;
+                    s.type = jType;
+                    s.on.push(finalCond);
+                    processed.add(s.alias);
+
                     for (let j = 0; j < otherWhere.length; j++) {
-                        if (otherWhere[j].isJoin && otherWhere[j].aliases.every(a => processed.has(a))) {
-                            s.on.push(otherWhere.splice(j, 1)[0].cond);
+                        const ow = otherWhere[j];
+                        if (ow.aliases.every(a => processed.has(a))) {
+                            if (ow.cond.trim() === '1 = 1' || ow.cond.trim() === '1=1') continue;
+
+                            let extraCond = otherWhere.splice(j, 1)[0].cond;
+                            // Also swap for extra conditions if they are joins to 's'
+                            if (extraCond.includes('=') && ow.aliases.length === 2 && !extraCond.includes('CASE')) {
+                                const parts = extraCond.split('=');
+                                if (parts.length === 2) {
+                                    const lhs = parts[0].trim();
+                                    const rhs = parts[1].trim();
+                                    const lhsAliasMatch = /^([a-zA-Z0-9_$]+)\./.exec(lhs);
+                                    if (lhsAliasMatch && lhsAliasMatch[1] === s.alias) {
+                                        extraCond = `${rhs} = ${lhs}`;
+                                    }
+                                }
+                            }
+                            s.on.push(extraCond);
                             j--;
                         }
                     }
 
                     const sortedOn = s.on.sort((a, b) => {
-                        const aIsJoin = (a.match(/\b[a-zA-Z0-9_$]+\.[a-zA-Z0-9_$]+\b/g) || []).length >= 2;
-                        const bIsJoin = (b.match(/\b[a-zA-Z0-9_$]+\.[a-zA-Z0-9_$]+\b/g) || []).length >= 2;
-                        if (aIsJoin && !bIsJoin) return -1;
-                        if (!aIsJoin && bIsJoin) return 1;
-                        return 0;
+                        const aIsJ = (a.match(/\b[a-zA-Z0-9_$]+\.[a-zA-Z0-9_$]+\b/g) || []).length >= 2;
+                        const bIsJ = (b.match(/\b[a-zA-Z0-9_$]+\.[a-zA-Z0-9_$]+\b/g) || []).length >= 2;
+                        return (bIsJ ? 1 : 0) - (aIsJ ? 1 : 0);
                     });
-                    newFrom += `\n ${s.type} ${s.raw} ON ${sortedOn.join(' AND ')}${s.comment ? ' ' + s.comment : ''}`;
+
+                    newFrom += `\n ${s.type} ${s.raw}`;
+                    if (sortedOn.length > 0) {
+                        newFrom += `\n  ON ${sortedOn[0]}`;
+                        for (let k = 1; k < sortedOn.length; k++) {
+                            newFrom += `\n AND ${sortedOn[k]}`;
+                        }
+                    }
+                    if (s.comment) newFrom += ' ' + s.comment;
                     changed = true;
                     break;
                 }
@@ -272,111 +228,75 @@ const OracleToPG = (function () {
         });
 
         const finalConditions = otherWhere.map(ow => ow.cond);
-
-        let res = sql.replace(fromMatch[0], "FROM " + newFrom);
-        if (whereMatch) {
-            if (finalConditions.length > 0) {
-                res = res.replace(whereMatch[0], "WHERE " + finalConditions.join("\n   AND "));
-            } else {
-                res = res.replace(whereMatch[0], "WHERE 1 = 1");
-            }
+        let newSql = sql.replace(fromClause, ' ' + newFrom + ' ');
+        if (finalConditions.length > 0) {
+            newSql = newSql.replace(whereClause, ' ' + finalConditions.join('\n   AND ') + ' ');
+        } else {
+            newSql = newSql.replace(whereClause, ' 1 = 1 ');
         }
-        return res;
+        return newSql;
     }
 
     function getTableAlias(t) {
-        // Strip SQL comments first
         const clean = t.replace(/(--.*|\/\*[\s\S]*?\*\/)/g, '').trim();
         const parts = clean.split(/\s+/);
         return parts[parts.length - 1];
     }
 
-    // Robust CSV splitter for DECODE etc. (handles single quotes and nested parens)
     function splitCsv(str) {
-        const results = [];
-        let current = "";
-        let depth = 0;
-        let inQuote = false;
+        const result = [];
+        let current = "", depth = 0, inQuote = false;
         for (let i = 0; i < str.length; i++) {
             const char = str[i];
-            if (char === "'") {
-                // Peek for escaped single quote (doubled: '')
-                if (inQuote && str[i + 1] === "'") {
-                    current += "''";
-                    i++; // skip next quote
-                } else {
-                    inQuote = !inQuote;
-                    current += char;
+            if (char === "'" && str[i - 1] !== "\\") inQuote = !inQuote;
+            if (!inQuote) {
+                if (char === "(") depth++;
+                else if (char === ")") depth--;
+                else if (char === "," && depth === 0) {
+                    result.push(current);
+                    current = "";
+                    continue;
                 }
-            } else if (char === ',' && depth === 0 && !inQuote) {
-                results.push(current);
-                current = "";
-            } else {
-                if (!inQuote) {
-                    if (char === '(') depth++;
-                    if (char === ')') depth--;
-                }
-                current += char;
             }
+            current += char;
         }
-        results.push(current);
-        return results;
+        result.push(current);
+        return result;
     }
 
-    // --- Java Source Parser ---
     const Parser = {
-        // Robust string extraction regex (handles escaped quotes \")
         stringRegex: /"((?:[^"\\]|\\.)*)"/,
 
         extract: function (src) {
             if (!src) return "";
             const lines = src.split('\n');
-            let result = [];
+            const result = [];
             let inBlock = false;
 
             lines.forEach(line => {
                 const trimmed = line.trim();
-
-                // 1. Block Comments
-                if (trimmed.startsWith('/*')) {
+                if (trimmed.startsWith('/*') && !trimmed.includes('*/')) {
                     inBlock = true;
-                    result.push("/*<@");
-                    if (trimmed.includes('*/')) {
-                        const content = line.substring(line.indexOf('/*') + 2, line.lastIndexOf('*/')).trim();
-                        if (content) result.push(content);
-                        result.push("@>*/");
-                        inBlock = false;
-                    } else {
-                        const content = line.substring(line.indexOf('/*') + 2).trim();
-                        if (content) result.push(content);
-                    }
+                    result.push(line);
                     return;
                 }
                 if (inBlock) {
-                    if (trimmed.includes('*/')) {
-                        const content = line.substring(0, line.lastIndexOf('*/')).trim();
-                        if (content) result.push(content);
-                        result.push("@>*/");
-                        inBlock = false;
-                    } else {
-                        result.push(line);
-                    }
+                    result.push(line);
+                    if (trimmed.includes('*/')) inBlock = false;
                     return;
                 }
-
-                // 2. Standalone line comments
+                if (trimmed.startsWith('/*') && trimmed.includes('*/')) {
+                    result.push(line);
+                    return;
+                }
                 if (trimmed.startsWith('//')) {
                     result.push(`/*@ ${trimmed} */`);
                     return;
                 }
 
-                // 3. String extraction
                 const match = this.stringRegex.exec(line);
                 if (match) {
-                    // Extract SQL content. Do NOT trimEnd to preserve internal spaces.
                     let sql = match[1].replace(/\\n/g, '').replace(/\\r/g, '').replace(/\\"/g, '"');
-
-                    // Detect trailing comment
                     const trailer = line.substring(line.indexOf(match[0]) + match[0].length);
                     const cMatch = /(\/\/.*|\/\*.*?\*\/)/.exec(trailer);
                     let marker = "";
@@ -387,7 +307,6 @@ const OracleToPG = (function () {
                     }
                     result.push(sql + (marker ? " " + marker : ""));
                 } else if (trimmed) {
-                    // Lines without strings but might have comments
                     const cMatch = /(\/\/.*|\/\*.*?\*\/)/.exec(line);
                     if (cMatch) {
                         const c = cMatch[1];
@@ -397,32 +316,21 @@ const OracleToPG = (function () {
                 }
             });
 
-            // Fallback: If no strings were extracted but the input has content, 
-            // check if it looks like raw SQL (not Java code)
             if (result.length === 0 && src.trim()) {
-                const trimmed = src.trim().toUpperCase();
-                if (trimmed.startsWith('SELECT') || trimmed.startsWith('INSERT') ||
-                    trimmed.startsWith('UPDATE') || trimmed.startsWith('DELETE') ||
-                    trimmed.startsWith('WITH') || trimmed.startsWith('CREATE')) {
-                    return src;
-                }
+                const t = src.trim().toUpperCase();
+                if (/^(SELECT|INSERT|UPDATE|DELETE|WITH|CREATE)/.test(t)) return src;
             }
-
             return result.join('\n');
         },
 
         detectStyle: function (src) {
             const lines = src.split('\n');
-            let vName = "sbSql";
-            let type = "append";
-
+            let vName = "sbSql", type = "append";
             for (let line of lines) {
                 const trimmed = line.trim();
                 if (!trimmed || trimmed.startsWith('/') || trimmed.startsWith('*')) continue;
-
                 const appM = /([a-zA-Z0-9_$]+)\.append/i.exec(line);
                 if (appM) return { vName: appM[1], type: "append" };
-
                 const assignM = /([a-zA-Z0-9_$]+)\s*(\+?=)\s*"/i.exec(line);
                 if (assignM) return { vName: assignM[1], type: assignM[2] === "+=" ? "plusAssign" : "assign" };
             }
@@ -433,92 +341,44 @@ const OracleToPG = (function () {
             if (!src) return "";
             const srcLines = src.split('\n');
             const pgLines = pgSqlLines.split('\n');
-            let pgIdx = 0;
-            let inBlock = false;
+            const style = this.detectStyle(src);
 
-            return srcLines.map(line => {
-                const trimmed = line.trim();
-                const pgLine = pgLines[pgIdx] || "";
-                const pgTrimmed = pgLine.trim();
-
-                // 1. Handle Block Restoration
-                if (trimmed.startsWith('/*')) {
-                    inBlock = true;
-                    if (pgTrimmed === "/*<@") pgIdx++;
-                    return line;
+            // Find the SQL region in src
+            let firstSqlIdx = -1, lastSqlIdx = -1;
+            srcLines.forEach((line, idx) => {
+                if (this.stringRegex.test(line)) {
+                    if (firstSqlIdx === -1) firstSqlIdx = idx;
+                    lastSqlIdx = idx;
                 }
-                if (inBlock) {
-                    if (trimmed.includes('*/')) {
-                        inBlock = false;
-                        if (pgLines[pgIdx] && pgLines[pgIdx].trim() === "@>*/") pgIdx++;
-                    } else if (pgIdx < pgLines.length && pgLines[pgIdx].trim() !== "@>*/") {
-                        // If it's block content, we just keep the original line as is, but advance pgIdx
-                        pgIdx++;
-                    }
-                    return line;
+            });
+
+            if (firstSqlIdx === -1) return src;
+
+            const result = [];
+            // Preserve lines before SQL region
+            for (let i = 0; i < firstSqlIdx; i++) result.push(srcLines[i]);
+
+            // Replace SQL region with PG lines
+            const baseIndentMatch = srcLines[firstSqlIdx].match(/^\s*/);
+            const indent = baseIndentMatch ? baseIndentMatch[0] : "    ";
+
+            pgLines.forEach(pgLine => {
+                if (style.type === "append") {
+                    result.push(`${indent}${style.vName}.append("${pgLine.replace(/"/g, '\\"')} \\n");`);
+                } else if (style.type === "plusAssign") {
+                    result.push(`${indent}${style.vName} += "${pgLine.replace(/"/g, '\\"')} ";`);
+                } else {
+                    result.push(`${indent}${style.vName} = "${pgLine.replace(/"/g, '\\"')} ";`);
                 }
+            });
 
-                // 2. Handle Standalone Comments
-                if (trimmed.startsWith('//') && pgTrimmed.startsWith('/*@')) {
-                    pgIdx++;
-                    return line;
-                }
+            // Preserve lines after SQL region
+            for (let i = lastSqlIdx + 1; i < srcLines.length; i++) result.push(srcLines[i]);
 
-                // 3. Handle Code and Trailing Comments
-                const match = this.stringRegex.exec(line);
-
-                if (match && pgIdx < pgLines.length) {
-                    const startQuote = line.indexOf(match[0]);
-                    const endQuote = startQuote + match[0].length;
-
-                    const prefix = line.substring(0, startQuote + 1);
-                    const suffix = line.substring(endQuote - 1);
-
-                    let targetPg = pgLines[pgIdx++];
-
-                    // Detect markers in converted SQL (Markers are appended with ONE space in extract)
-                    const m1 = / \/\*@ (.*?) \*\/$/.exec(targetPg); // // style
-                    const m2 = / \/\*@@ (.*?) \*\/$/.exec(targetPg); // /* */ style
-
-                    let comment = "";
-                    if (m1) {
-                        comment = m1[1];
-                        targetPg = targetPg.replace(m1[0], '');
-                    } else if (m2) {
-                        comment = "/* " + m2[1] + " */";
-                        targetPg = targetPg.replace(m2[0], '');
-                    }
-
-                    const needsNewLine = line.includes('\\n');
-                    const content = targetPg + (needsNewLine ? " \\n " : "");
-
-                    // Reconstruct suffix to include/update comment
-                    let baseSuffix = suffix;
-                    if (comment) {
-                        // Remove existing comment from baseSuffix logic
-                        baseSuffix = suffix.replace(/(\/\/.*|\/\*.*?\*\/)/, '').trimEnd();
-
-                        // Carefully reconstruct with semicolon preservation
-                        if (baseSuffix.endsWith(';')) {
-                            return prefix + content + baseSuffix.slice(0, -1) + ' ' + comment + ';';
-                        }
-                        return prefix + content + baseSuffix + ' ' + comment;
-                    }
-
-                    return prefix + content + suffix;
-                }
-
-                // 4. Fallback: marker lines without content match
-                if (pgTrimmed.startsWith('/*@') || pgTrimmed.startsWith('/*@@')) {
-                    pgIdx++;
-                }
-
-                return line;
-            }).join('\n');
+            return result.join('\n');
         }
     };
 
-    // Public API
     return {
         transform: transform,
         extract: Parser.extract.bind(Parser),

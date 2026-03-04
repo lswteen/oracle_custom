@@ -6,6 +6,10 @@ const logic = new Function('window', content + '\nreturn OracleToPG;')(mockWindo
 
 const javaSrc = `
 sbSql.append(" SELECT C.COMMON_DETAIL_CODE_NAME AS BANK_ACCT_TYPE_NAME \\n");
+/*
+* 멀티라인 주석 테스트
+* 두번째 줄
+*/
 sbSql.append("     ,NVL(B.SA_GUBUN_CODE,?) AS SA_GUBUN_CODE \\n");
 sbSql.append("     ,H.FUNCTION_NAME AS SA_GUBUN_NAME \\n");
 sbSql.append("     ,B.BANK_ACCT_NICKNAME \\n");
