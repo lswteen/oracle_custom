@@ -597,12 +597,9 @@ const OracleToPG = (function () {
 
                 if (style.type === "append") {
                     if (style.isFluent) {
-                        if (idx === 0) {
-                            const prefix = style.hasVName ? `${style.vName}.append` : `append`;
-                            result.push(`${indent}${prefix}("${escapedLine} \\n")${isLast ? ';' : ''}${trail}`);
-                        } else {
-                            result.push(`${indent}.append("${escapedLine} \\n")${isLast ? ';' : ''}${trail}`);
-                        }
+                        const prefix = (idx === 0 && style.hasVName) ? `${style.vName}.append` : `append`;
+                        const suffix = isLast ? ';' : '.';
+                        result.push(`${indent}${prefix}("${escapedLine} \\n")${suffix}${trail}`);
                     } else {
                         result.push(`${indent}${style.vName}.append("${escapedLine} \\n");${trail}`);
                     }
