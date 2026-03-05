@@ -284,7 +284,7 @@ sbSql.append(" AND C.BANK_ACCT_ID = F.BANK_ACCT_ID \n");
 sbSql.append(" AND E.COMMON_CODE (+) = '0021' \n");
 sbSql.append(" AND E.COMMON_DETAIL_CODE (+) = F.BANK_ACCT_TYPE_CODE \n");
 sbSql.append(" ORDER BY C.PAYMENT_ACCOUNT_BANK_CODE \n");
-sbSql.append("        , C.PAYMENT_ACCOUNT_NO \n");
+sbSql.append("        , C.PAYMENT_ACCOUNT_NO \n"); /* 정렬순서 중요 */
 ```
 
 ### PG SQL (Transformed)
@@ -322,16 +322,16 @@ ORDER BY TOTAL_AMT DESC
 
 ### Java Source (StringBuffer)
 ```java
-sbSql.append(" SELECT B.BANK_NAME, C.COMMON_DETAIL_CODE_NAME, SUM(A.TRANS_AMT) AS TOTAL_AMT \n");
-sbSql.append(" FROM EGAS.CMS_TRANS_LIST_T A \n");
-sbSql.append("    , EGAS.BANK_ACCT_T B \n");
-sbSql.append("    , EGAS.COMMON_DETAIL_CODE_T C \n");
-sbSql.append(" WHERE A.BANK_ACCT_SEQ = B.BANK_ACCT_SEQ \n");
-sbSql.append(" AND B.BANK_CODE = C.COMMON_DETAIL_CODE \n");
-sbSql.append(" AND C.COMMON_CODE = '0021' \n");
-sbSql.append(" AND A.TRANS_DATE >= :START_DATE \n");
-sbSql.append(" GROUP BY B.BANK_NAME, C.COMMON_DETAIL_CODE_NAME \n");
-sbSql.append(" ORDER BY TOTAL_AMT DESC \n");
+sbSql.append(" SELECT B.BANK_NAME, C.COMMON_DETAIL_CODE_NAME, SUM(A.TRANS_AMT) AS TOTAL_AMT \n")
+.append(" FROM EGAS.CMS_TRANS_LIST_T A \n")
+.append("    , EGAS.BANK_ACCT_T B \n")
+.append("    , EGAS.COMMON_DETAIL_CODE_T C \n")
+.append(" WHERE A.BANK_ACCT_SEQ = B.BANK_ACCT_SEQ \n")
+.append(" AND B.BANK_CODE = C.COMMON_DETAIL_CODE \n")
+.append(" AND C.COMMON_CODE = '0021' \n")
+.append(" AND A.TRANS_DATE >= :START_DATE \n")
+.append(" GROUP BY B.BANK_NAME, C.COMMON_DETAIL_CODE_NAME \n")
+.append(" ORDER BY TOTAL_AMT DESC \n");
 ```
 
 ### PG SQL (Transformed)
@@ -347,5 +347,53 @@ sbSql.append(" ORDER BY TOTAL_AMT DESC \n");
  WHERE 1 = 1 
 GROUP BY B.BANK_NAME, C.COMMON_DETAIL_CODE_NAME 
  ORDER BY TOTAL_AMT DESC 
+```
+
+## 6. Subquery Joins & substrb (Complex Nesting & Function Conversion)
+
+### Oracle Source
+```sql
+SELECT SUM(CASE WHEN bb.appl_state_code IS NULL THEN 1 ELSE 0 END)
+     , SUBSTRB(SF_SUN_ACCOUNT_CODE_SLT(aa.code), 1, 12) -- sun 코드
+FROM   authorization_code_t aa
+     , ( SELECT  x.dept_code
+               , (CASE WHEN COUNT(*) > 0 THEN '01' ELSE NULL END) appl_state_code
+           FROM  es_questionnaire_sector_t x
+               , es_questionnaire_t        y
+          WHERE  x.work_yymm_from               = ?
+            AND  x.work_yymm_to                 = ?
+            AND  x.dept_code                    = NVL(?, x.dept_code)
+            AND  x.use_flag                     = '1'
+            AND  x.es_questionnaire_sector_seq  = y.es_questionnaire_sector_seq
+            AND  y.use_flag                     = '1'
+          GROUP BY x.dept_code ) bb
+WHERE  aa.code      = bb.dept_code(+)   -- Oracle Outer Join
+  AND  aa.code      = NVL(?, aa.code)
+  AND  aa.type      = '400'
+  AND  aa.use_flag  = '1'
+```
+
+### PostgreSQL (Converted ANSI)
+```sql
+SELECT SUM(CASE WHEN bb.appl_state_code IS NULL THEN 1 ELSE 0 END)
+     , SUBSTRING(SF_SUN_ACCOUNT_CODE_SLT(aa.code), 1, 12) -- sun 코드
+FROM authorization_code_t aa
+ LEFT JOIN (  SELECT  x.dept_code
+               , (CASE WHEN COUNT(*) > 0 THEN '01' ELSE NULL END) appl_state_code
+           FROM es_questionnaire_sector_t x
+ JOIN es_questionnaire_t        y
+  ON x.es_questionnaire_sector_seq  = y.es_questionnaire_sector_seq
+ AND x.dept_code                    = COALESCE(?, x.dept_code)
+ AND x.work_yymm_from               = ?
+ AND x.work_yymm_to                 = ?
+ AND x.use_flag                     = '1'
+ AND y.use_flag                     = '1'
+ WHERE 1 = 1 
+GROUP BY x.dept_code  ) bb
+  ON aa.code      = bb.dept_code -- Oracle Outer Join
+ AND aa.code      = COALESCE(?, aa.code)
+ AND aa.type      = '400'
+ AND aa.use_flag  = '1'
+ WHERE 1 = 1 
 ```
 
