@@ -13,38 +13,24 @@ const OracleToPG = (function () {
 
         let result = sql;
 
+        // --- ROLLUP Protection ---
+        const rollupPlaceholders = [];
+        result = result.replace(/\b(ROLLUP|CUBE|GROUPING\s+SETS)\s*\([\s\S]+?\)/gi, (match) => {
+            const key = `__ROLLUP_${rollupPlaceholders.length}__`;
+            rollupPlaceholders.push(match);
+            return key;
+        });
+
+        // 0. AS spacing cleanup (ENSURE AS HAS A LEADING SPACE)
+        // Match END or closing paren followed immediately by AS (case insensitive)
+        result = result.replace(/(\bEND|\))AS\b/gi, '$1 AS');
+
         // 1. Basic Keyword Cleanup
         result = result.replace(/\bNVL\b/gi, 'COALESCE');
         result = result.replace(/\bSYSDATE\b/gi, 'CURRENT_TIMESTAMP');
         result = result.replace(/\bsubstrb\b/gi, 'SUBSTRING');
 
-        // 2. DECODE to CASE (Vertical Formatting)
-        const decodeRegex = /DECODE\s*\(([\s\S]+?)\)/gi;
-        result = result.replace(decodeRegex, (match, p1) => {
-            const args = splitCsv(p1);
-            if (args.length < 3) return match;
-
-            const col = args[0].trim();
-            let caseStr = "CASE\n";
-            for (let i = 1; i < args.length - 1; i += 2) {
-                const val = args[i].trim();
-                const res = args[i + 1].trim();
-                caseStr += `     WHEN ${col} = ${val} THEN ${res}\n`;
-            }
-
-            if (args.length % 2 === 0) {
-                caseStr += `     ELSE ${args[args.length - 1].trim()}\n`;
-            }
-            caseStr += " END";
-            return caseStr;
-        });
-
-        // 3. NVL2 (Vertical Formatting)
-        result = result.replace(/NVL2\s*\(([\s\S]+?)\)/gi, (match, p1) => {
-            const args = splitCsv(p1);
-            if (args.length !== 3) return match;
-            return `CASE\n     WHEN ${args[0].trim()} IS NOT NULL THEN ${args[1].trim()}\n     ELSE ${args[2].trim()}\n END`;
-        });
+        // (Removed old regex-based DECODE and NVL2 as they are now handled recursively below)
 
         // 4. COALESCE (Vertical Formatting for complex nested cases)
         // Match COALESCE followed by a CASE to trigger vertical split and wrap CASE in parentheses with specific layout
@@ -54,7 +40,7 @@ const OracleToPG = (function () {
 
         // 4. Robust Recursive Function Transformer
         function transformFunctions(text) {
-            const funcs = ['TO_CHAR', 'TO_DATE', 'TO_NUMBER', 'LPAD', 'RPAD', 'NVL', 'SUBSTR', 'MAX', 'SUBSTRING', 'COALESCE'];
+            const funcs = ['TO_CHAR', 'TO_DATE', 'TO_NUMBER', 'LPAD', 'RPAD', 'NVL', 'SUBSTR', 'MAX', 'SUBSTRING', 'COALESCE', 'DECODE', 'NVL2', 'INSTR', 'TRUNC', 'ADD_MONTHS', 'LAST_DAY'];
 
             function getNextMatch(str) {
                 let earliest = null;
@@ -103,6 +89,59 @@ const OracleToPG = (function () {
                         }
                     } else if (next.name === 'NVL') {
                         replacement = `COALESCE(${transformedContent})`;
+                    } else if (next.name === 'DECODE') {
+                        if (args.length < 3) {
+                            replacement = `DECODE(${transformedContent})`;
+                        } else {
+                            const col = args[0].trim();
+                            let caseStr = "CASE\n";
+                            for (let i = 1; i < args.length - 1; i += 2) {
+                                const val = args[i].trim();
+                                const res = args[i + 1].trim();
+                                caseStr += `    WHEN ${col} = ${val} THEN ${res}\n`;
+                            }
+                            if (args.length % 2 === 0) {
+                                caseStr += `    ELSE ${args[args.length - 1].trim()}\n`;
+                            }
+                            caseStr += " END";
+                            replacement = caseStr;
+                        }
+                    } else if (next.name === 'NVL2') {
+                        if (args.length !== 3) {
+                            replacement = `NVL2(${transformedContent})`;
+                        } else {
+                            replacement = `CASE\n    WHEN ${args[0].trim()} IS NOT NULL THEN ${args[1].trim()}\n    ELSE ${args[2].trim()}\n END`;
+                        }
+                    } else if (next.name === 'INSTR') {
+                        const iArgs = splitCsv(transformedContent);
+                        if (iArgs.length === 2) {
+                            replacement = `STRPOS(${iArgs[0].trim()}, ${iArgs[1].trim()})`;
+                        } else if (iArgs.length === 3 && iArgs[2].trim() === '1') {
+                            replacement = `STRPOS(${iArgs[0].trim()}, ${iArgs[1].trim()})`;
+                        } else if (iArgs.length === 3) {
+                            replacement = `STRPOS(SUBSTRING(${iArgs[0].trim()} FROM ${iArgs[2].trim()}), ${iArgs[1].trim()})`;
+                        } else {
+                            replacement = `/*⚠️ instr() 커스텀 함수 필요 */ instr(${transformedContent})`;
+                        }
+                    } else if (next.name === 'TRUNC') {
+                        if (args.length === 1) {
+                            replacement = `DATE_TRUNC('day', ${args[0].trim()})`;
+                        } else {
+                            const fmtMap = { "'MM'": 'month', "'YYYY'": 'year', "'DD'": 'day', "'HH'": 'hour' };
+                            const pgFmt = fmtMap[args[1].trim().toUpperCase()] || 'day';
+                            replacement = `DATE_TRUNC('${pgFmt}', ${args[0].trim()})`;
+                        }
+                    } else if (next.name === 'ADD_MONTHS') {
+                        if (args.length === 2) {
+                            const n = args[1].trim();
+                            const sign = n.startsWith('-') ? '-' : '+';
+                            const abs = n.replace('-', '');
+                            replacement = `(${args[0].trim()} ${sign} INTERVAL '${abs} months')`;
+                        }
+                    } else if (next.name === 'LAST_DAY') {
+                        if (args.length === 1) {
+                            replacement = `(DATE_TRUNC('month', ${args[0].trim()}) + INTERVAL '1 month' - INTERVAL '1 day')`;
+                        }
                     }
 
                     if (replacement === null) {
@@ -120,11 +159,24 @@ const OracleToPG = (function () {
 
         result = transformFunctions(result);
 
-        // 5. ROWNUM = 1 to LIMIT 1
+        // 5. ROWNUM range handling (Handle <= and <)
         let hasRownumLimit = false;
+        let rownumLimitVal = 1;
+
         if (/\bROWNUM\s*=\s*1\b/i.test(result)) {
             result = result.replace(/\s+AND\s+ROWNUM\s*=\s*1\b/gi, '');
             result = result.replace(/\bWHERE\s+ROWNUM\s*=\s*1\b/gi, 'WHERE 1=1');
+            hasRownumLimit = true;
+            rownumLimitVal = 1;
+        }
+
+        const rownumLteMatch = result.match(/\bROWNUM\s*(<=?)\s*(\d+)\b/i);
+        if (rownumLteMatch) {
+            const op = rownumLteMatch[1];
+            const n = parseInt(rownumLteMatch[2]);
+            rownumLimitVal = (op === '<') ? n - 1 : n;
+            result = result.replace(/\s+AND\s+ROWNUM\s*<=?\s*\d+\b/gi, '');
+            result = result.replace(/\bWHERE\s+ROWNUM\s*<=?\s*\d+\b/gi, 'WHERE 1=1');
             hasRownumLimit = true;
         }
 
@@ -136,16 +188,54 @@ const OracleToPG = (function () {
         result = result.replace(/\.DATE\b/gi, '."DATE"');
         result = result.replace(/\bDATE\s*=/gi, '"DATE" =');
 
+        // 8.5 GROUPING comparison (Numeric sum or single call compared to string literal needs numeric comparison or ::TEXT cast)
+        // Pattern 1: Parenthesized sum of grouping functions
+        result = result.replace(/(\([\s\S]+?grouping\s*\([\s\S]+?\))\s*(=|!=|<>)\s*'(\d+)'/gi, '$1::TEXT $2 \'$3\'');
+        // Pattern 2: Single grouping function or field compared to string digit
+        result = result.replace(/\bGROUPING\s*\([^)]+\)\s*(=|!=|<>)\s*'(\d+)'/gi, (match, op, num) => {
+            return match.replace(`'${num}'`, num);
+        });
+
         // 9. Dual removal (careful with FROM DUAL)
+        // Handle CONNECT BY LEVEL before general DUAL removal
+        const connectByRegex = /SELECT\s+LEVEL\s+(?:AS\s+)?(\w+)?\s*FROM\s+DUAL\s+CONNECT\s+BY\s+LEVEL\s*<=\s*([\s\S]+)/gi;
+        result = result.replace(connectByRegex, (match, alias, rest) => {
+            const finalAlias = alias || 'level';
+            let limit = "";
+            let depth = 0;
+            let foundEnd = false;
+            for (let i = 0; i < rest.length; i++) {
+                if (rest[i] === '(') depth++;
+                else if (rest[i] === ')') {
+                    if (depth === 0) {
+                        limit = rest.substring(0, i);
+                        const remainder = rest.substring(i);
+                        foundEnd = true;
+                        return `SELECT gs AS ${finalAlias} FROM generate_series(1, ${limit.trim()}) gs${remainder}`;
+                    }
+                    depth--;
+                }
+            }
+            if (!foundEnd) {
+                return `SELECT gs AS ${finalAlias} FROM generate_series(1, ${rest.trim()}) gs`;
+            }
+            return match;
+        });
+
         result = result.replace(/\s+FROM\s+DUAL\b/gi, '');
 
         // 6. OUTER JOIN (+) -> ANSI JOIN
         result = convertToAnsiJoin(result);
 
         if (hasRownumLimit && !/\bLIMIT\b/i.test(result)) {
-            // Append LIMIT 1 at the very end
-            result += "\n LIMIT 1";
+            // Append LIMIT N at the very end
+            result += `\n LIMIT ${rownumLimitVal}`;
         }
+
+        // --- ROLLUP Restoration ---
+        rollupPlaceholders.forEach((val, idx) => {
+            result = result.replace(`__ROLLUP_${idx}__`, val);
+        });
 
         // EXTRA: Remove table aliases from UPDATE SET
         if (/UPDATE\s+(\w+)\s+(\w+)\s+SET/i.test(result)) {
@@ -222,7 +312,7 @@ const OracleToPG = (function () {
         const hasSubquery = tables.some(t => t.trim().startsWith('('));
         if (tables.length < 2 && !hasPlus && !hasSubquery) return sql;
 
-        const conditions = whereClause ? whereClause.split(/\s+AND\s+/i).map(c => c.trim()).filter(Boolean) : [];
+        const conditions = whereClause ? splitConditions(whereClause) : [];
 
         const joinStates = tables.map((t, idx) => {
             const commentMatch = /(--.*|\/\*[\s\S]*?\*\/)/.exec(t);
@@ -237,7 +327,7 @@ const OracleToPG = (function () {
                     const transformedSub = transform(subContent);
                     const finalAlias = alias || "sub";
                     // Important: cleanT must contain the alias for ANSI join reconstruction
-                    cleanT = `( ${transformedSub} ) ${finalAlias}`;
+                    cleanT = `( ${transformedSub} ) AS ${finalAlias}`;
                     alias = finalAlias;
                 }
             }
@@ -255,8 +345,8 @@ const OracleToPG = (function () {
             const comment = condMatch ? (condMatch[2] || "") : "";
 
             const isJoin = /\(\+\)/.test(cond);
-            let cleanCond = cond.replace(/\s*\(\+\)\s*/g, '');
-            const aliases = (cond.match(/\b[a-zA-Z0-9_$]+\.[a-zA-Z0-9_$]+\b/g) || [])
+            let cleanCond = cond.replace(/\(\+\)/g, '');
+            const aliases = (cleanCond.match(/\b[a-zA-Z0-9_$]+\.[a-zA-Z0-9_$]+\b/g) || [])
                 .map(a => a.split('.')[0])
                 .filter((v, i, a) => a.indexOf(v) === i);
 
@@ -372,6 +462,57 @@ const OracleToPG = (function () {
         return result;
     }
 
+    /**
+     * Balanced split of WHERE clause conditions handling BETWEEN and parentheses
+     */
+    function splitConditions(where) {
+        const result = [];
+        let current = "";
+        let depth = 0;
+        let inQuote = false;
+        let i = 0;
+        while (i < where.length) {
+            const char = where[i];
+            if (char === "'" && where[i - 1] !== "\\") inQuote = !inQuote;
+            if (!inQuote) {
+                if (char === "(") depth++;
+                else if (char === ")") depth--;
+                else if (depth === 0) {
+                    // BETWEEN ... AND protection
+                    const betweenMatch = where.substring(i).match(/^BETWEEN\s+[\s\S]+?\s+AND\s+[\s\S]+?(?=\s+AND|\s*$)/i);
+                    if (betweenMatch) {
+                        if (current && !current.endsWith(' ')) current += ' ';
+                        current += betweenMatch[0];
+                        i += betweenMatch[0].length;
+                        // Check if there's an AND immediately after the BETWEEN...AND block
+                        const nextAndMatch = where.substring(i).match(/^\s+AND\s+/i);
+                        if (nextAndMatch) {
+                            result.push(current.trim());
+                            current = "";
+                            i += nextAndMatch[0].length;
+                            continue;
+                        } else {
+                            // If no subsequent AND, it's the end of the WHERE clause or the last condition
+                            break;
+                        }
+                    }
+                    // Standard AND split
+                    const andMatch = /^AND\s/i.exec(where.substring(i));
+                    if (andMatch && i > 0 && /\s/.test(where[i - 1])) {
+                        result.push(current.trim());
+                        current = "";
+                        i += 4; // " AND".length
+                        continue;
+                    }
+                }
+            }
+            current += char;
+            i++;
+        }
+        if (current.trim()) result.push(current.trim());
+        return result.filter(Boolean);
+    }
+
     function findTopLevelKeyword(sql, kw) {
         let depth = 0;
         let inQuote = false;
@@ -401,11 +542,14 @@ const OracleToPG = (function () {
         // For subqueries like (SELECT ...) AS alias or just (SELECT ...) alias
         if (clean.startsWith('(')) {
             const lastParenIdx = clean.lastIndexOf(')');
-            const trailer = clean.substring(lastParenIdx + 1).trim();
+            let trailer = clean.substring(lastParenIdx + 1).trim();
             if (!trailer) return "";
+
+            // If trailer starts with AS (case insensitive), handle it
+            const asMatch = /^AS\s+(.*)/i.exec(trailer);
+            if (asMatch) return asMatch[1].trim().split(/\s+/)[0];
+
             const parts = trailer.split(/\s+/);
-            // Skip optional AS
-            if (parts[0].toUpperCase() === 'AS' && parts.length > 1) return parts[1];
             return parts[0];
         }
         const parts = clean.split(/\s+/);
@@ -589,7 +733,7 @@ const OracleToPG = (function () {
                 let trail = "";
                 const trailMatch = /\s*\/\*#TRAIL#\s+([\s\S]+?)\s+\*\/$/.exec(pgLine);
                 if (trailMatch) {
-                    trail = " " + trailMatch[1].replace(/\* \//g, '*/');
+                    trail = " " + trailMatch[1].replace(/\*\//g, '* /');
                     pgLine = pgLine.substring(0, trailMatch.index);
                 }
                 const escapedLine = pgLine.replace(/"/g, '\\"');
@@ -621,7 +765,8 @@ const OracleToPG = (function () {
         transform: transform,
         extract: Parser.extract.bind(Parser),
         detectStyle: Parser.detectStyle.bind(Parser),
-        smartReplace: Parser.smartReplace.bind(Parser)
+        smartReplace: Parser.smartReplace.bind(Parser),
+        splitConditions: splitConditions // Export the new helper
     };
 })();
 

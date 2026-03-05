@@ -1,6 +1,6 @@
 # Oracle to PostgreSQL Conversion Test Samples (Diverse Cases)
 
-This file contains 10 diverse test cases in Java `StringBuffer` (`sbSql.append`) style, covering all enhanced conversion rules: nested functions, strict typing, pagination, and outer joins.
+This file contains diverse test cases in Java `StringBuffer` (`sbSql.append`) style, covering all enhanced conversion rules: nested functions, strict typing, pagination, and outer joins.
 
 ## Case 1: Voucher Sequence Generation (Nested & ROWNUM)
 ```java
@@ -89,7 +89,7 @@ sbSql.append(" SELECT 'TYPE2', TO_NUMBER(?) \n");
 sbSql.append(" FROM   DUAL \n");
 ```
 
-### Case 11: UNION ALL with Mixed Function Styles
+### Case 11: Mixed Ansi Join and Inner Queries
 ```sql
 SELECT CURRENCY_CODE
      , SUM(INAMT)  INAMT
@@ -110,4 +110,90 @@ FROM (SELECT B.BANK_ACCT_TYPE_CODE
         AND B.BANK_ACCT_SEQ     = A.BANK_ACCT_SEQ
 ) sub
 GROUP BY CURRENCY_CODE
+```
+
+### Case 12: AS Spacing Verification (ENDAS & Attached Alias)
+```java
+sbSql.append(" SELECT CASE WHEN A.AMT > 0 THEN 'POS' ELSE 'NEG' ENDAS AMT_STATUS \n");
+sbSql.append("      , (SELECT MAX(VAL) FROM SUB_T)as MAX_VAL \n");
+sbSql.append("      , B.COL1edas ALIAS1 \n");
+sbSql.append(" FROM   TABLE_A A \n");
+sbSql.append("    , (SELECT * FROM TABLE_B)as B \n");
+sbSql.append(" WHERE  A.ID = B.ID \n");
+```
+
+### Case 13: Indentation Verification (DECODE & NVL2)
+```java
+sbSql.append(" SELECT A.USER_ID \n");
+sbSql.append("      , DECODE(A.STATUS, '1', 'ACTIVE', '2', 'SUSPENDED', 'DELETED') AS STATUS_DESC \n");
+sbSql.append("      , NVL2(A.LAST_LOGIN, 'LOGGED_IN', 'NEVER') AS LOGIN_STATUS \n");
+sbSql.append(" FROM   USER_T A \n");
+```
+
+### Case 15: ROLLUP and GROUPING Support
+```java
+sbSql.append(" SELECT DECODE(GROUPING(dept_code), 1, '합계', dept_code) AS dept_code \n");
+sbSql.append("      , SUM(salary) \n");
+sbSql.append(" FROM   emp_t \n");
+sbSql.append(" GROUP BY ROLLUP(dept_code) \n");
+```
+
+### Case 14: Complex CONNECT BY LEVEL to generate_series
+```java
+sbSql.append(" SELECT * \n");
+sbSql.append(" FROM ( \n");
+sbSql.append("     SELECT LEVEL \n");
+sbSql.append("     FROM DUAL \n");
+sbSql.append("     CONNECT BY LEVEL <= ( \n");
+sbSql.append("         SELECT MAX(TO_NUMBER(notice_trace_no)) \n");
+sbSql.append("         FROM afbs_cms_body_0200_700_t \n");
+sbSql.append("         WHERE notice_send_date = :NOTICE_SEND_DATE \n");
+sbSql.append("         AND DECODE(header_bank_code, '026', '088', header_bank_code) = :BANK_CODE \n");
+sbSql.append("     ) - TO_NUMBER('000001') \n");
+sbSql.append(" ) a \n");
+```
+
+### Case 16: GROUPING Sum Comparison (Numeric Sum vs String Literal)
+```java
+sbSql.append(" HAVING (grouping(b.common_detail_code_name) \n");
+sbSql.append("      + grouping(a.chk_id) \n");
+sbSql.append("      + grouping(a.chk_reg_date)) = '0' \n");
+sbSql.append(" OR   (grouping(b.common_detail_code_name) \n");
+sbSql.append("      + grouping(a.chk_id) \n");
+sbSql.append("      + grouping(a.chk_reg_date)) = '2' \n");
+```
+
+### Case 17: INSTR to STRPOS Conversion
+```java
+sbSql.append(" SELECT DECODE(INSTR(opp_deposit_holder_name, '아메리카인터내'), 0, 'NONE', 'EXISTS') AS DEPOSIT_STATUS \n");
+sbSql.append(" FROM   DEPT_T \n");
+```
+
+### Case 18: BETWEEN ... AND in Join Condition
+```java
+sbSql.append(" SELECT * FROM table_a a, table_b b \n");
+sbSql.append(" WHERE a.trans_date(+) BETWEEN :FROM AND :TO \n");
+sbSql.append(" AND a.use_flag = '1' \n");
+```
+
+### Case 19: Complex INSTR (3+ Arguments)
+```java
+sbSql.append(" SELECT INSTR(A.COL1, 'sub', 1) as POS1 \n");
+sbSql.append("      , INSTR(A.COL1, 'sub', 3) as POS2 \n");
+sbSql.append(" FROM   TABLE_A A \n");
+```
+
+### Case 20: ROWNUM <= N Range
+```java
+sbSql.append(" SELECT * FROM USER_T \n");
+sbSql.append(" WHERE  STATUS = '1' \n");
+sbSql.append(" AND    ROWNUM <= 10 \n");
+```
+
+### Case 21: Date Functions (TRUNC, ADD_MONTHS, LAST_DAY)
+```java
+sbSql.append(" SELECT TRUNC(SYSDATE, 'MM') as MONTH_START \n");
+sbSql.append("      , ADD_MONTHS(SYSDATE, 3) as THREE_MONTHS_LATER \n");
+sbSql.append("      , LAST_DAY(SYSDATE) as MONTH_END \n");
+sbSql.append(" FROM   DUAL \n");
 ```
