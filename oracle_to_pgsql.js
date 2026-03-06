@@ -197,29 +197,46 @@ const OracleToPG = (function () {
         });
 
         // 9. Dual removal (careful with FROM DUAL)
-        // Handle CONNECT BY LEVEL before general DUAL removal
-        const connectByRegex = /SELECT\s+LEVEL\s+(?:AS\s+)?(\w+)?\s*FROM\s+DUAL\s+CONNECT\s+BY\s+LEVEL\s*<=\s*([\s\S]+)/gi;
-        result = result.replace(connectByRegex, (match, alias, rest) => {
-            const finalAlias = alias || 'level';
+        // Handle CONNECT BY LEVEL/ROWNUM before general DUAL removal
+        const connectByRegex = /SELECT\s+([\s\S]+?)\s+FROM\s+DUAL\s+CONNECT\s+BY\s+(?:LEVEL|ROWNUM)\s*<=\s*([\s\S]+)/gi;
+        result = result.replace(connectByRegex, (match, selectList, rest) => {
             let limit = "";
             let depth = 0;
             let foundEnd = false;
+            let remainder = "";
+
             for (let i = 0; i < rest.length; i++) {
                 if (rest[i] === '(') depth++;
                 else if (rest[i] === ')') {
                     if (depth === 0) {
                         limit = rest.substring(0, i);
-                        const remainder = rest.substring(i);
+                        remainder = rest.substring(i);
                         foundEnd = true;
-                        return `SELECT gs AS ${finalAlias} FROM generate_series(1, ${limit.trim()}) gs${remainder}`;
+                        break;
                     }
                     depth--;
                 }
             }
             if (!foundEnd) {
-                return `SELECT gs AS ${finalAlias} FROM generate_series(1, ${rest.trim()}) gs`;
+                limit = rest;
             }
-            return match;
+
+            // Transform selectList: replace LEVEL/ROWNUM with gs
+            // We use a replacer function to avoid replacing LEVEL if it's an alias (following AS)
+            let transformedSelect = selectList.replace(/(^|[^a-zA-Z0-9_$])(LEVEL|ROWNUM)\b/gi, (m, prefix, ident) => {
+                // If the previous non-whitespace word was "AS", don't replace
+                const before = selectList.substring(0, selectList.indexOf(m)).trim().toLowerCase();
+                if (before.endsWith(' as')) return m;
+                return prefix + 'gs';
+            });
+
+            // If it was just "LEVEL" or "ROWNUM" (or variations), add back an alias for consistency
+            const trimmedOriginal = selectList.trim().toLowerCase();
+            if (trimmedOriginal === 'level' || trimmedOriginal === 'rownum') {
+                transformedSelect = `gs AS ${trimmedOriginal}`;
+            }
+
+            return `SELECT ${transformedSelect.trim()} FROM generate_series(1, ${limit.trim()}) gs${remainder}`;
         });
 
         result = result.replace(/\s+FROM\s+DUAL\b/gi, '');

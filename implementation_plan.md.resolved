@@ -1,0 +1,31 @@
+# Implementation Plan: CONNECT BY ROWNUM Support
+
+Oracle's `CONNECT BY ROWNUM <= N` pattern on `DUAL` is often used to generate sequences. Our current implementation only handles `CONNECT BY LEVEL` and assumes a simple `SELECT LEVEL`. This plan extends support to `ROWNUM` and arbitrary selection lists.
+
+## Proposed Changes
+
+### [Component] SQL Conversion Engine
+
+#### [MODIFY] [oracle_to_pgsql.js](file:///c:/workspace/oracle_custom/oracle_to_pgsql.js)
+- Update `connectByRegex` to capture the entire selection list and support `ROWNUM` in the `CONNECT BY` clause.
+- Regex: `/SELECT\s+([\s\S]+?)\s+FROM\s+DUAL\s+CONNECT\s+BY\s+(?:LEVEL|ROWNUM)\s*<=\s*([\s\S]+)/gi`
+- Within the replacement logic:
+    - Capture the selection list.
+    - If `LEVEL` or `ROWNUM` is used in the selection list (not as an alias), replace it with the `generate_series` alias (e.g., `gs`).
+    - Preserve existing alias logic for `LEVEL AS alias`.
+- Ensure balanced parenthesis handling for the limit expression is maintained.
+
+#### [MODIFY] [test_samples.md](file:///c:/workspace/oracle_custom/test_samples.md)
+- Add Case 22 containing `CONNECT BY ROWNUM` and `SELECT ROWNUM - 1`.
+
+## Verification Plan
+
+### Automated Tests
+- Create `verify_connect_by_rownum.js` to test:
+    - `SELECT ROWNUM FROM DUAL CONNECT BY ROWNUM <= 10`
+    - `SELECT '000001'::NUMERIC + (ROWNUM - 1) FROM DUAL CONNECT BY ROWNUM <= 5`
+    - `SELECT LEVEL FROM DUAL CONNECT BY LEVEL <= 3` (Regression)
+- Verify that `ROWNUM` and `LEVEL` in the `SELECT` list are correctly replaced by `gs`.
+
+### Manual Verification
+- Verify the generated SQL matches the user's expected output.
