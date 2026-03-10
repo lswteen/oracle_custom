@@ -1,0 +1,10 @@
+/**
+ * OracleToPG Converter Utility
+ * Version: 1.2.0
+ * Description: Utility to convert Oracle SQL to PostgreSQL and extract SQL from Java source.
+ *
+ * [v1.2.0 변경사항]
+ * - 4슬롯 워크플로우 지원
+ * - Parser.extract: 주석라인 ( //, /* */ )을 완전히 제거하여 "Clean Oracle SQL" 추출
+ * - Parser.restoreAsTextBlock: Java 21 Text Block (""") 형식 복원 및 원본 코드 주석(--) 삽입
+ */

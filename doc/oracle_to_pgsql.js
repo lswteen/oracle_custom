@@ -1,6 +1,6 @@
 /**
  * OracleToPG Converter Utility
- * Version: 1.0.1
+ * Version: 1.0.3
  * Description: Utility to convert Oracle SQL to PostgreSQL and extract SQL from Java source.
  */
 
@@ -21,26 +21,24 @@ const OracleToPG = (function () {
             return key;
         });
 
-        // 0. AS spacing cleanup (ENSURE AS HAS A LEADING SPACE)
-        // Match END or closing paren followed immediately by AS (case insensitive)
+        // 0. AS spacing cleanup
         result = result.replace(/(\bEND|\))AS\b/gi, '$1 AS');
 
         // 1. Basic Keyword Cleanup
         result = result.replace(/\bNVL\b/gi, 'COALESCE');
         result = result.replace(/\bSYSDATE\b/gi, 'CURRENT_TIMESTAMP');
-        result = result.replace(/\bsubstrb\b/gi, 'SUBSTRING');
+        // SUBSTRB: 단순 SUBSTRING 치환 제거 → PG 커스텀 함수(substrb)로 위임
+        // 등록 필요: CREATE OR REPLACE FUNCTION substrb(text,int,int) RETURNS text AS
+        //   $$ SELECT convert_from(substring(convert_to($1,'UTF8'),$2,$3),'UTF8') $$ LANGUAGE SQL IMMUTABLE;
 
-        // (Removed old regex-based DECODE and NVL2 as they are now handled recursively below)
-
-        // 4. COALESCE (Vertical Formatting for complex nested cases)
-        // Match COALESCE followed by a CASE to trigger vertical split and wrap CASE in parentheses with specific layout
+        // 2. COALESCE vertical formatting
         result = result.replace(/COALESCE\s*\(\s*(CASE[\s\S]+?END)\s*,\s*(.*?)\s*\)/gi, (match, caseBody, fallback) => {
             return `COALESCE((\n${caseBody}\n), ${fallback})`;
         });
 
-        // 4. Robust Recursive Function Transformer
+        // 3. Robust Recursive Function Transformer
         function transformFunctions(text) {
-            const funcs = ['TO_CHAR', 'TO_DATE', 'TO_NUMBER', 'LPAD', 'RPAD', 'NVL', 'SUBSTR', 'MAX', 'SUBSTRING', 'COALESCE', 'DECODE', 'NVL2', 'INSTR', 'TRUNC', 'ADD_MONTHS', 'LAST_DAY'];
+            const funcs = ['TO_CHAR', 'TO_DATE', 'TO_NUMBER', 'LPAD', 'RPAD', 'NVL', 'SUBSTR', 'SUBSTRB', 'MAX', 'SUBSTRING', 'COALESCE', 'DECODE', 'NVL2', 'INSTR', 'TRUNC', 'ADD_MONTHS', 'LAST_DAY'];
 
             function getNextMatch(str) {
                 let earliest = null;
@@ -112,6 +110,11 @@ const OracleToPG = (function () {
                         } else {
                             replacement = `CASE\n    WHEN ${args[0].trim()} IS NOT NULL THEN ${args[1].trim()}\n    ELSE ${args[2].trim()}\n END`;
                         }
+                    } else if (next.name === 'SUBSTRB') {
+                        // 바이트 기준 자르기 → PG 커스텀 함수 substrb() 로 위임
+                        // 한글전용: N바이트 → N÷3 글자 (SUBSTRING 직접 변환 가능)
+                        // 혼합컬럼: PG에 substrb() 커스텀 함수 등록 필요
+                        replacement = `substrb(${transformedContent})`;
                     } else if (next.name === 'INSTR') {
                         const iArgs = splitCsv(transformedContent);
                         if (iArgs.length === 2) {
@@ -159,45 +162,51 @@ const OracleToPG = (function () {
 
         result = transformFunctions(result);
 
-        // 5. ROWNUM range handling (Handle <= and <)
+        // 4. ROWNUM range handling (ROWNUM=1, <=N, <N → LIMIT)
+        // ⚠️ CONNECT BY ROWNUM 패턴과 충돌하지 않도록
+        //    generate_series 로 변환될 CONNECT BY 패턴이 없을 때만 처리
+        const hasConnectByRownum = /FROM\s+DUAL\s+CONNECT\s+BY\s+(?:LEVEL|ROWNUM)\s*<=/i.test(result);
+
         let hasRownumLimit = false;
         let rownumLimitVal = 1;
 
-        if (/\bROWNUM\s*=\s*1\b/i.test(result)) {
-            result = result.replace(/\s+AND\s+ROWNUM\s*=\s*1\b/gi, '');
-            result = result.replace(/\bWHERE\s+ROWNUM\s*=\s*1\b/gi, 'WHERE 1=1');
-            hasRownumLimit = true;
-            rownumLimitVal = 1;
+        if (!hasConnectByRownum) {
+            if (/\bROWNUM\s*=\s*1\b/i.test(result)) {
+                result = result.replace(/\s+AND\s+ROWNUM\s*=\s*1\b/gi, '');
+                result = result.replace(/\bWHERE\s+ROWNUM\s*=\s*1\b/gi, 'WHERE 1=1');
+                hasRownumLimit = true;
+                rownumLimitVal = 1;
+            }
+
+            const rownumLteMatch = result.match(/\bROWNUM\s*(<=?)\s*(\d+)\b/i);
+            if (rownumLteMatch) {
+                const op = rownumLteMatch[1];
+                const n = parseInt(rownumLteMatch[2]);
+                rownumLimitVal = (op === '<') ? n - 1 : n;
+                result = result.replace(/\s+AND\s+ROWNUM\s*<=?\s*\d+\b/gi, '');
+                result = result.replace(/\bWHERE\s+ROWNUM\s*<=?\s*\d+\b/gi, 'WHERE 1=1');
+                hasRownumLimit = true;
+            }
         }
 
-        const rownumLteMatch = result.match(/\bROWNUM\s*(<=?)\s*(\d+)\b/i);
-        if (rownumLteMatch) {
-            const op = rownumLteMatch[1];
-            const n = parseInt(rownumLteMatch[2]);
-            rownumLimitVal = (op === '<') ? n - 1 : n;
-            result = result.replace(/\s+AND\s+ROWNUM\s*<=?\s*\d+\b/gi, '');
-            result = result.replace(/\bWHERE\s+ROWNUM\s*<=?\s*\d+\b/gi, 'WHERE 1=1');
-            hasRownumLimit = true;
-        }
-
-        // 7. Concatenation Type Safety
+        // 5. Concatenation Type Safety
         result = result.replace(/(\?)\s*\|\|/g, '($1)::TEXT ||');
         result = result.replace(/\|\|\s*(\?)/g, '|| ($1)::TEXT');
 
-        // 8. Reserved Keyword Quoting (e.g., DATE)
+        // 6. Reserved Keyword Quoting (e.g., DATE)
         result = result.replace(/\.DATE\b/gi, '."DATE"');
         result = result.replace(/\bDATE\s*=/gi, '"DATE" =');
 
-        // 8.5 GROUPING comparison (Numeric sum or single call compared to string literal needs numeric comparison or ::TEXT cast)
+        // 7. GROUPING comparison
         // Pattern 1: Parenthesized sum of grouping functions
         result = result.replace(/(\([\s\S]+?grouping\s*\([\s\S]+?\))\s*(=|!=|<>)\s*'(\d+)'/gi, '$1::TEXT $2 \'$3\'');
-        // Pattern 2: Single grouping function or field compared to string digit
+        // Pattern 2: Single grouping function compared to string digit
         result = result.replace(/\bGROUPING\s*\([^)]+\)\s*(=|!=|<>)\s*'(\d+)'/gi, (match, op, num) => {
             return match.replace(`'${num}'`, num);
         });
 
-        // 9. Dual removal (careful with FROM DUAL)
-        // Handle CONNECT BY LEVEL/ROWNUM before general DUAL removal
+        // 8. CONNECT BY LEVEL / ROWNUM → generate_series
+        // ⚠️ ROWNUM 처리보다 반드시 뒤에 위치 (충돌 방지를 위해 hasConnectByRownum 플래그로 제어)
         const connectByRegex = /SELECT\s+([\s\S]+?)\s+FROM\s+DUAL\s+CONNECT\s+BY\s+(?:LEVEL|ROWNUM)\s*<=\s*([\s\S]+)/gi;
         result = result.replace(connectByRegex, (match, selectList, rest) => {
             let limit = "";
@@ -217,20 +226,16 @@ const OracleToPG = (function () {
                     depth--;
                 }
             }
-            if (!foundEnd) {
-                limit = rest;
-            }
+            if (!foundEnd) limit = rest;
 
-            // Transform selectList: replace LEVEL/ROWNUM with gs
-            // We use a replacer function to avoid replacing LEVEL if it's an alias (following AS)
+            // LEVEL/ROWNUM → gs 치환 (AS 뒤 alias 는 제외)
             let transformedSelect = selectList.replace(/(^|[^a-zA-Z0-9_$])(LEVEL|ROWNUM)\b/gi, (m, prefix, ident) => {
-                // If the previous non-whitespace word was "AS", don't replace
                 const before = selectList.substring(0, selectList.indexOf(m)).trim().toLowerCase();
                 if (before.endsWith(' as')) return m;
                 return prefix + 'gs';
             });
 
-            // If it was just "LEVEL" or "ROWNUM" (or variations), add back an alias for consistency
+            // SELECT LEVEL / SELECT ROWNUM 단독인 경우
             const trimmedOriginal = selectList.trim().toLowerCase();
             if (trimmedOriginal === 'level' || trimmedOriginal === 'rownum') {
                 transformedSelect = `gs AS ${trimmedOriginal}`;
@@ -239,22 +244,42 @@ const OracleToPG = (function () {
             return `SELECT ${transformedSelect.trim()} FROM generate_series(1, ${limit.trim()}) gs${remainder}`;
         });
 
+        // 9. FROM DUAL 제거
         result = result.replace(/\s+FROM\s+DUAL\b/gi, '');
 
-        // 6. OUTER JOIN (+) -> ANSI JOIN
+        // 10. OUTER JOIN (+) → ANSI JOIN
         result = convertToAnsiJoin(result);
 
+        // 10.5 Recursive Subquery Transformation
+        // We do this using balanced content matching to avoid breaking on (+) or nested functions.
+        let newResult = "", lastIdx = 0;
+        for (let i = 0; i < result.length; i++) {
+            if (result[i] === '(') {
+                const content = getBalancedContent(result, i);
+                if (content !== null) {
+                    const trimmed = content.trim();
+                    if (/^\s*SELECT\b/i.test(trimmed)) {
+                        newResult += result.substring(lastIdx, i);
+                        newResult += `( ${transform(trimmed, dateFormat)} )`;
+                        i += content.length + 1;
+                        lastIdx = i + 1;
+                    }
+                }
+            }
+        }
+        result = newResult + result.substring(lastIdx);
+
+        // 11. LIMIT 추가 (CONNECT BY 패턴이 없을 때만)
         if (hasRownumLimit && !/\bLIMIT\b/i.test(result)) {
-            // Append LIMIT N at the very end
             result += `\n LIMIT ${rownumLimitVal}`;
         }
 
-        // --- ROLLUP Restoration ---
+        // 12. ROLLUP 복원
         rollupPlaceholders.forEach((val, idx) => {
             result = result.replace(`__ROLLUP_${idx}__`, val);
         });
 
-        // EXTRA: Remove table aliases from UPDATE SET
+        // 13. UPDATE alias 정리
         if (/UPDATE\s+(\w+)\s+(\w+)\s+SET/i.test(result)) {
             result = result.replace(/UPDATE\s+(\w+)\s+(\w+)\s+SET\s+([\s\S]+?)\s+WHERE/i, (match, table, alias, sets) => {
                 const cleanSets = sets.replace(new RegExp(`${alias}\\.`, 'g'), '');
@@ -278,10 +303,34 @@ const OracleToPG = (function () {
     }
 
     function convertToAnsiJoin(sql) {
-        if (/\bUNION\b/i.test(sql)) {
-            const segments = sql.split(/(\bUNION\b(?:\s+ALL)?)/i);
+        // Depth-aware splitting for UNION / UNION ALL
+        const segments = [];
+        let lastIdx = 0;
+        let depth = 0;
+        let inQuote = false;
+
+        for (let i = 0; i < sql.length; i++) {
+            const char = sql[i];
+            if (char === "'" && sql[i - 1] !== "\\") inQuote = !inQuote;
+            if (!inQuote) {
+                if (char === "(") depth++;
+                else if (char === ")") depth--;
+                else if (depth === 0) {
+                    const unionMatch = sql.substring(i).match(/^(\bUNION\b(?:\s+ALL)?)/i);
+                    if (unionMatch) {
+                        segments.push(sql.substring(lastIdx, i));
+                        segments.push(unionMatch[0]);
+                        i += unionMatch[0].length;
+                        lastIdx = i;
+                    }
+                }
+            }
+        }
+        segments.push(sql.substring(lastIdx));
+
+        if (segments.length > 1) {
             return segments.map(seg => {
-                if (/(\bUNION\b(?:\s+ALL)?)/i.test(seg)) return seg;
+                if (/^UNION\b/i.test(seg.trim())) return seg;
                 return processSingleQueryJoin(seg);
             }).join('');
         }
@@ -294,27 +343,18 @@ const OracleToPG = (function () {
         const fromIdx = findTopLevelKeyword(sql, "FROM");
         if (fromIdx === -1) return sql;
 
-        // Extract Footer (GROUP BY, ORDER BY, etc.) first to avoid interference
         const footers = ["GROUP BY", "ORDER BY", "HAVING", "LIMIT"];
         let footerIdx = -1;
         for (const f of footers) {
             const idx = findTopLevelKeyword(sql, f);
-            if (idx !== -1 && (footerIdx === -1 || idx < footerIdx)) {
-                footerIdx = idx;
-            }
+            if (idx !== -1 && (footerIdx === -1 || idx < footerIdx)) footerIdx = idx;
         }
 
-        let footer = "";
-        let workingSql = sql;
-        if (footerIdx !== -1) {
-            footer = sql.substring(footerIdx);
-            workingSql = sql.substring(0, footerIdx);
-        }
+        let footer = "", workingSql = sql;
+        if (footerIdx !== -1) { footer = sql.substring(footerIdx); workingSql = sql.substring(0, footerIdx); }
 
-        // Extract WHERE
         let whereIdx = findTopLevelKeyword(workingSql, "WHERE");
-        let whereClause = "";
-        let fromClause = "";
+        let whereClause = "", fromClause = "";
         const selectSegment = workingSql.substring(0, fromIdx + 4);
 
         if (whereIdx !== -1) {
@@ -337,13 +377,12 @@ const OracleToPG = (function () {
             let cleanT = t.replace(/(--.*|\/\*[\s\S]*?\*\/)/g, '').trim();
             let alias = getTableAlias(cleanT);
 
-            // If it's a subquery, transform it recursively
             if (cleanT.startsWith('(')) {
                 const subContent = getBalancedContent(cleanT, 0);
                 if (subContent !== null) {
                     const transformedSub = transform(subContent);
                     const finalAlias = alias || "sub";
-                    // Important: cleanT must contain the alias for ANSI join reconstruction
+                    // 서브쿼리 내부의 별칭 처리 강화
                     cleanT = `( ${transformedSub} ) AS ${finalAlias}`;
                     alias = finalAlias;
                 }
@@ -360,13 +399,11 @@ const OracleToPG = (function () {
             const condMatch = /([\s\S]+?)(--.*|\/\*[\s\S]*?\*\/)?$/.exec(condStr);
             const cond = condMatch ? condMatch[1].trim() : condStr.trim();
             const comment = condMatch ? (condMatch[2] || "") : "";
-
             const isJoin = /\(\+\)/.test(cond);
             let cleanCond = cond.replace(/\(\+\)/g, '');
             const aliases = (cleanCond.match(/\b[a-zA-Z0-9_$]+\.[a-zA-Z0-9_$]+\b/g) || [])
                 .map(a => a.split('.')[0])
                 .filter((v, i, a) => a.indexOf(v) === i);
-
             otherWhere.push({ cond: cleanCond, isJoin: isJoin, aliases: aliases, comment: comment });
         });
 
@@ -379,22 +416,16 @@ const OracleToPG = (function () {
                 const s = joinStates[i];
                 if (s.joined) continue;
 
-                // Path 1: LEFT JOIN (+)
                 let idx = otherWhere.findIndex(ow => {
                     if (!ow.isJoin) return false;
-                    const hasS = ow.aliases.includes(s.alias);
-                    const hasOthers = ow.aliases.some(a => a !== s.alias && processed.has(a));
-                    return hasS && hasOthers;
+                    return ow.aliases.includes(s.alias) && ow.aliases.some(a => a !== s.alias && processed.has(a));
                 });
                 let jType = 'LEFT JOIN';
 
-                // Path 2: INNER JOIN
                 if (idx === -1) {
                     idx = otherWhere.findIndex(ow => {
                         if (ow.isJoin) return false;
-                        const hasS = ow.aliases.includes(s.alias);
-                        const hasOthers = ow.aliases.some(a => a !== s.alias && processed.has(a));
-                        return hasS && hasOthers;
+                        return ow.aliases.includes(s.alias) && ow.aliases.some(a => a !== s.alias && processed.has(a));
                     });
                     jType = 'JOIN';
                 }
@@ -403,16 +434,13 @@ const OracleToPG = (function () {
                     const matched = otherWhere.splice(idx, 1)[0];
                     let finalCond = matched.cond + (matched.comment ? ' ' + matched.comment : '');
 
-                    // Swap if needed: BaseTable = NewTable
                     if (finalCond.includes('=') && matched.aliases.length === 2 && !finalCond.includes('CASE')) {
                         const parts = finalCond.split('=');
                         if (parts.length === 2) {
                             const lhs = parts[0].trim();
                             const rhs = parts[1].trim();
                             const lhsAliasMatch = /^([a-zA-Z0-9_$]+)\./.exec(lhs);
-                            if (lhsAliasMatch && lhsAliasMatch[1] === s.alias) {
-                                finalCond = `${rhs} = ${lhs}`;
-                            }
+                            if (lhsAliasMatch && lhsAliasMatch[1] === s.alias) finalCond = `${rhs} = ${lhs}`;
                         }
                     }
 
@@ -423,10 +451,8 @@ const OracleToPG = (function () {
 
                     for (let j = 0; j < otherWhere.length; j++) {
                         const ow = otherWhere[j];
-                        // Only move it to ON if it actually involves the newly joined table s.alias
                         if (ow.aliases.includes(s.alias) && ow.aliases.every(a => processed.has(a))) {
                             if (ow.cond.trim() === '1 = 1' || ow.cond.trim() === '1=1') continue;
-
                             const owm = otherWhere.splice(j, 1)[0];
                             let extraCond = owm.cond + (owm.comment ? ' ' + owm.comment : '');
                             if (extraCond.includes('=') && ow.aliases.length === 2 && !extraCond.includes('CASE')) {
@@ -435,9 +461,7 @@ const OracleToPG = (function () {
                                     const lhs = parts[0].trim();
                                     const rhs = parts[1].trim();
                                     const lhsAliasMatch = /^([a-zA-Z0-9_$]+)\./.exec(lhs);
-                                    if (lhsAliasMatch && lhsAliasMatch[1] === s.alias) {
-                                        extraCond = `${rhs} = ${lhs}`;
-                                    }
+                                    if (lhsAliasMatch && lhsAliasMatch[1] === s.alias) extraCond = `${rhs} = ${lhs}`;
                                 }
                             }
                             s.on.push(extraCond);
@@ -454,9 +478,7 @@ const OracleToPG = (function () {
                     newFrom += `\n ${s.type} ${s.raw}`;
                     if (sortedOn.length > 0) {
                         newFrom += `\n  ON ${sortedOn[0]}`;
-                        for (let k = 1; k < sortedOn.length; k++) {
-                            newFrom += `\n AND ${sortedOn[k]}`;
-                        }
+                        for (let k = 1; k < sortedOn.length; k++) newFrom += `\n AND ${sortedOn[k]}`;
                     }
                     if (s.comment) newFrom += ' ' + s.comment;
                     changed = true;
@@ -471,23 +493,14 @@ const OracleToPG = (function () {
 
         const finalConditions = otherWhere.map(ow => ow.cond + (ow.comment ? ' ' + ow.comment : ''));
         let result = selectSegment + ' ' + newFrom;
-        if (finalConditions.length > 0) {
-            result += '\n WHERE ' + finalConditions.join('\n   AND ');
-        }
+        if (finalConditions.length > 0) result += '\n WHERE ' + finalConditions.join('\n   AND ');
         if (footer) result += '\n' + footer;
-
         return result;
     }
 
-    /**
-     * Balanced split of WHERE clause conditions handling BETWEEN and parentheses
-     */
     function splitConditions(where) {
         const result = [];
-        let current = "";
-        let depth = 0;
-        let inQuote = false;
-        let i = 0;
+        let current = "", depth = 0, inQuote = false, i = 0;
         while (i < where.length) {
             const char = where[i];
             if (char === "'" && where[i - 1] !== "\\") inQuote = !inQuote;
@@ -495,31 +508,18 @@ const OracleToPG = (function () {
                 if (char === "(") depth++;
                 else if (char === ")") depth--;
                 else if (depth === 0) {
-                    // BETWEEN ... AND protection
                     const betweenMatch = where.substring(i).match(/^BETWEEN\s+[\s\S]+?\s+AND\s+[\s\S]+?(?=\s+AND|\s*$)/i);
                     if (betweenMatch) {
                         if (current && !current.endsWith(' ')) current += ' ';
                         current += betweenMatch[0];
                         i += betweenMatch[0].length;
-                        // Check if there's an AND immediately after the BETWEEN...AND block
                         const nextAndMatch = where.substring(i).match(/^\s+AND\s+/i);
-                        if (nextAndMatch) {
-                            result.push(current.trim());
-                            current = "";
-                            i += nextAndMatch[0].length;
-                            continue;
-                        } else {
-                            // If no subsequent AND, it's the end of the WHERE clause or the last condition
-                            break;
-                        }
+                        if (nextAndMatch) { result.push(current.trim()); current = ""; i += nextAndMatch[0].length; continue; }
+                        else break;
                     }
-                    // Standard AND split
                     const andMatch = /^AND\s/i.exec(where.substring(i));
                     if (andMatch && i > 0 && /\s/.test(where[i - 1])) {
-                        result.push(current.trim());
-                        current = "";
-                        i += 4; // " AND".length
-                        continue;
+                        result.push(current.trim()); current = ""; i += 4; continue;
                     }
                 }
             }
@@ -531,9 +531,10 @@ const OracleToPG = (function () {
     }
 
     function findTopLevelKeyword(sql, kw) {
-        let depth = 0;
-        let inQuote = false;
+        let depth = 0, inQuote = false;
         const kwLen = kw.length;
+        const isBoundary = (c) => /[^a-zA-Z0-9_$#]/.test(c);
+
         for (let i = 0; i < sql.length - kwLen; i++) {
             const char = sql[i];
             if (char === "'" && sql[i - 1] !== "\\") inQuote = !inQuote;
@@ -543,10 +544,9 @@ const OracleToPG = (function () {
                 else if (depth === 0) {
                     const sub = sql.substring(i, i + kwLen).toUpperCase();
                     if (sub === kw.toUpperCase()) {
-                        // Check word boundaries
                         const prev = i > 0 ? sql[i - 1] : " ";
                         const next = i + kwLen < sql.length ? sql[i + kwLen] : " ";
-                        if (/\s/.test(prev) && /\s/.test(next)) return i;
+                        if (isBoundary(prev) && isBoundary(next)) return i;
                     }
                 }
             }
@@ -556,21 +556,15 @@ const OracleToPG = (function () {
 
     function getTableAlias(t) {
         const clean = t.replace(/(--.*|\/\*[\s\S]*?\*\/)/g, '').trim();
-        // For subqueries like (SELECT ...) AS alias or just (SELECT ...) alias
         if (clean.startsWith('(')) {
             const lastParenIdx = clean.lastIndexOf(')');
             let trailer = clean.substring(lastParenIdx + 1).trim();
             if (!trailer) return "";
-
-            // If trailer starts with AS (case insensitive), handle it
             const asMatch = /^AS\s+(.*)/i.exec(trailer);
             if (asMatch) return asMatch[1].trim().split(/\s+/)[0];
-
-            const parts = trailer.split(/\s+/);
-            return parts[0];
+            return trailer.split(/\s+/)[0];
         }
         const parts = clean.split(/\s+/);
-        // Handle schema.table alias
         const lastPart = parts[parts.length - 1];
         if (lastPart.includes('.') || /^(FROM|JOIN|LEFT|RIGHT|INNER|OUTER|WHERE)$/i.test(lastPart)) return "";
         return lastPart;
@@ -585,11 +579,7 @@ const OracleToPG = (function () {
             if (!inQuote) {
                 if (char === "(") depth++;
                 else if (char === ")") depth--;
-                else if (char === "," && depth === 0) {
-                    result.push(current);
-                    current = "";
-                    continue;
-                }
+                else if (char === "," && depth === 0) { result.push(current); current = ""; continue; }
             }
             current += char;
         }
@@ -599,21 +589,14 @@ const OracleToPG = (function () {
 
     function splitFromClause(fromStr) {
         const result = [];
-        let current = "";
-        let depth = 0;
-        let inQuote = false;
-
+        let current = "", depth = 0, inQuote = false;
         for (let i = 0; i < fromStr.length; i++) {
             const char = fromStr[i];
             if (char === "'" && fromStr[i - 1] !== "\\") inQuote = !inQuote;
             if (!inQuote) {
                 if (char === "(") depth++;
                 else if (char === ")") depth--;
-                else if (char === "," && depth === 0) {
-                    result.push(current.trim());
-                    current = "";
-                    continue;
-                }
+                else if (char === "," && depth === 0) { result.push(current.trim()); current = ""; continue; }
             }
             current += char;
         }
@@ -632,47 +615,26 @@ const OracleToPG = (function () {
 
             lines.forEach(line => {
                 const trimmed = line.trim();
-                if (trimmed.startsWith('/*') && !trimmed.includes('*/')) {
-                    inBlock = true;
-                    result.push(line);
-                    return;
-                }
-                if (inBlock) {
-                    result.push(line);
-                    if (trimmed.includes('*/')) inBlock = false;
-                    return;
-                }
-                if (trimmed.startsWith('/*') && trimmed.includes('*/')) {
-                    result.push(line);
-                    return;
-                }
-                if (trimmed.startsWith('//')) {
-                    result.push(`/*@ ${trimmed} */`);
-                    return;
-                }
+                if (trimmed.startsWith('/*') && !trimmed.includes('*/')) { inBlock = true; result.push(line); return; }
+                if (inBlock) { result.push(line); if (trimmed.includes('*/')) inBlock = false; return; }
+                if (trimmed.startsWith('/*') && trimmed.includes('*/')) { result.push(line); return; }
+                if (trimmed.startsWith('//')) { result.push(`/*@ ${trimmed} */`); return; }
 
                 let lineMatch;
                 const matches = [];
                 const globalStringRegex = /"((?:[^"\\]|\\.)*)"/g;
-                while ((lineMatch = globalStringRegex.exec(line)) !== null) {
-                    matches.push(lineMatch);
-                }
+                while ((lineMatch = globalStringRegex.exec(line)) !== null) matches.push(lineMatch);
 
                 if (matches.length > 0) {
                     let combinedSql = "";
-                    matches.forEach(m => {
-                        combinedSql += m[1].replace(/\\n/g, '').replace(/\\r/g, '').replace(/\\"/g, '"');
-                    });
-
+                    matches.forEach(m => { combinedSql += m[1].replace(/\\n/g, '').replace(/\\r/g, '').replace(/\\"/g, '"'); });
+                    // @@TRAIL@@: append(\"...\") 바깥의 Java 트레일러 주석 보존
+                    // 브라우저 textarea 에서도 안전하게 유지됨 (탭 문자 미사용)
                     const lastMatch = matches[matches.length - 1];
                     const trailer = line.substring(line.indexOf(lastMatch[0]) + lastMatch[0].length);
                     const cMatch = /(\/\/.*|\/\*.*?\*\/|--.*)/.exec(trailer);
-                    let marker = "";
-                    if (cMatch) {
-                        const c = cMatch[1];
-                        marker = `/*#TRAIL# ${c.replace(/\*\//g, '* /')} */`;
-                    }
-                    result.push(combinedSql + (marker ? " " + marker : ""));
+                    if (cMatch) { combinedSql += `@@TRAIL@@${cMatch[1]}`; }
+                    result.push(combinedSql);
                 } else if (trimmed) {
                     const cMatch = /(\/\/.*|\/\*.*?\*\/)/.exec(line);
                     if (cMatch) {
@@ -692,31 +654,15 @@ const OracleToPG = (function () {
 
         detectStyle: function (src) {
             const lines = src.split('\n');
-            let vName = "sbSql", type = "append", isFluent = false;
-            let hasVName = false;
-
+            let vName = "sbSql", type = "append", isFluent = false, hasVName = false;
             for (let line of lines) {
                 const trimmed = line.trim();
                 if (!trimmed || trimmed.startsWith('/') || trimmed.startsWith('*')) continue;
-
                 const appM = /([a-zA-Z0-9_$]+)\.append/i.exec(line);
-                if (appM) {
-                    vName = appM[1];
-                    type = "append";
-                    hasVName = true;
-                    // If we see .append on the same line after another append, or on next lines, it's fluent
-                    if (line.split('.append').length > 2) isFluent = true;
-                } else if (/\.?append\s*\(/i.test(line)) {
-                    type = "append";
-                    isFluent = true;
-                }
-
+                if (appM) { vName = appM[1]; type = "append"; hasVName = true; if (line.split('.append').length > 2) isFluent = true; }
+                else if (/\.?append\s*\(/i.test(line)) { type = "append"; isFluent = true; }
                 const assignM = /([a-zA-Z0-9_$]+)\s*(\+?=)\s*"/i.exec(line);
-                if (assignM) {
-                    vName = assignM[1];
-                    type = assignM[2] === "+=" ? "plusAssign" : "assign";
-                    hasVName = true;
-                }
+                if (assignM) { vName = assignM[1]; type = assignM[2] === "+=" ? "plusAssign" : "assign"; hasVName = true; }
             }
             return { vName, type, isFluent, hasVName };
         },
@@ -727,31 +673,25 @@ const OracleToPG = (function () {
             const pgLines = pgSqlLines.split('\n');
             const style = this.detectStyle(src);
 
-            // Find the SQL region in src
             let firstSqlIdx = -1, lastSqlIdx = -1;
             srcLines.forEach((line, idx) => {
-                if (this.stringRegex.test(line)) {
-                    if (firstSqlIdx === -1) firstSqlIdx = idx;
-                    lastSqlIdx = idx;
-                }
+                if (this.stringRegex.test(line)) { if (firstSqlIdx === -1) firstSqlIdx = idx; lastSqlIdx = idx; }
             });
-
             if (firstSqlIdx === -1) return src;
 
             const result = [];
-            // Preserve lines before SQL region
             for (let i = 0; i < firstSqlIdx; i++) result.push(srcLines[i]);
 
-            // Replace SQL region with PG lines
             const baseIndentMatch = srcLines[firstSqlIdx].match(/^\s*/);
             const indent = baseIndentMatch ? baseIndentMatch[0] : "    ";
 
             pgLines.forEach((pgLine, idx) => {
+                // @@TRAIL@@: 슬롯2→3 변환 후에도 마커가 유지되므로 여기서 분리 후 복원
                 let trail = "";
-                const trailMatch = /\s*\/\*#TRAIL#\s+([\s\S]+?)\s+\*\/$/.exec(pgLine);
-                if (trailMatch) {
-                    trail = " " + trailMatch[1].replace(/\*\//g, '* /');
-                    pgLine = pgLine.substring(0, trailMatch.index);
+                const trailIdx = pgLine.indexOf('@@TRAIL@@');
+                if (trailIdx !== -1) {
+                    trail = " " + pgLine.substring(trailIdx + 9);
+                    pgLine = pgLine.substring(0, trailIdx);
                 }
                 const escapedLine = pgLine.replace(/"/g, '\\"');
                 const isLast = idx === pgLines.length - 1;
@@ -771,9 +711,7 @@ const OracleToPG = (function () {
                 }
             });
 
-            // Preserve lines after SQL region
             for (let i = lastSqlIdx + 1; i < srcLines.length; i++) result.push(srcLines[i]);
-
             return result.join('\n');
         }
     };
@@ -783,7 +721,7 @@ const OracleToPG = (function () {
         extract: Parser.extract.bind(Parser),
         detectStyle: Parser.detectStyle.bind(Parser),
         smartReplace: Parser.smartReplace.bind(Parser),
-        splitConditions: splitConditions // Export the new helper
+        splitConditions: splitConditions
     };
 })();
 

@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Oracle to PG Converter Pro</title>
+    <title>Oracle to PG Converter Pro v1.2.1</title>
     <style>
         :root {
             --primary: #2563eb;
@@ -158,85 +158,58 @@
         ::-webkit-scrollbar-thumb:hover {
             background: rgba(255, 255, 255, 0.2);
         }
-
-        .helper-list {
-            position: absolute;
-            top: 40px;
-            right: 16px;
-            background: #1e293b;
-            border: 1px solid var(--border);
-            padding: 8px;
-            font-size: 10px;
-            border-radius: 4px;
-            display: none;
-            z-index: 10;
-        }
     </style>
 </head>
 
 <body>
     <header>
-        <div class="logo">ORACLE ➜ POSTGRESQL</div>
+        <div class="logo">ORACLE ➜ POSTGRESQL (v1.2.1)</div>
         <div style="display: flex; align-items: center; gap: 16px;">
-            <div
-                style="display: flex; align-items: center; gap: 8px; background: rgba(255,255,255,0.05); padding: 4px 12px; border-radius: 20px; border: 1px solid var(--border);">
-                <span
-                    style="font-size: 10px; color: var(--text-muted); font-weight: 700; text-transform: uppercase;">Date
-                    Format:</span>
-                <select id="dateFormat"
-                    style="background: transparent; border: none; color: var(--accent); font-size: 11px; font-weight: 600; cursor: pointer; outline: none;">
-                    <option value="YYYY-MM-DD" style="background: var(--bg-deep);">YYYY-MM-DD</option>
-                    <option value="YYYYMMDD" style="background: var(--bg-deep);">YYYYMMDD</option>
-                    <option value="YYYY/MM/DD" style="background: var(--bg-deep);">YYYY/MM/DD</option>
-                    <option value="YYYY-MM-DD HH24:MI:SS" style="background: var(--bg-deep);">YYYY-MM-DD HH24:MI:SS
-                    </option>
-                </select>
-            </div>
             <div style="display: flex; gap: 8px;">
                 <button class="btn btn-ghost" onclick="clearAll()">Clear All</button>
-                <button class="btn btn-primary" onclick="copyResult()">Final Copy</button>
+                <button class="btn btn-primary" onclick="copyResult()">Copy Result (Slot 4)</button>
             </div>
         </div>
     </header>
 
     <div class="main-layout">
-        <!-- Input Panel -->
+        <!-- Slot 1 -->
         <div class="panel">
             <div class="panel-header">
-                <span>1. Java Source</span>
-                <span style="color: var(--warning)">Paste original code</span>
+                <span>1. Java Source (Cache)</span>
+                <span id="cacheStatus" style="color: var(--success); text-transform: none;">Waiting for input...</span>
             </div>
-            <textarea id="javaIn" placeholder="StringBuffer.append() or String concatenation code here..."></textarea>
+            <textarea id="javaIn" placeholder="Paste Java code with SQL here..."></textarea>
         </div>
 
-        <!-- Extraction Panel -->
+        <!-- Slot 2 -->
         <div class="panel">
             <div class="panel-header">
-                <span>2. Extracted Oracle SQL</span>
+                <span>2. Clean Oracle SQL (Pure Syntax)</span>
                 <button class="btn btn-ghost" onclick="copy('oracleOut')">Copy</button>
             </div>
-            <textarea id="oracleOut" placeholder="Extracted SQL will appear here..."></textarea>
+            <textarea id="oracleOut" placeholder="Clean SQL without comments or Java boilerplate..."></textarea>
         </div>
 
-        <!-- Transformation Panel -->
+        <!-- Slot 3 -->
         <div class="panel">
             <div class="panel-header">
-                <span>3. Transformed PG SQL</span>
+                <span>3. PostgreSQL (Converted)</span>
                 <div style="display: flex; gap: 8px;">
                     <button class="btn btn-primary" onclick="convert()">Transform Now</button>
                     <button class="btn btn-ghost" onclick="copy('pgOut')">Copy</button>
                 </div>
             </div>
-            <textarea id="pgOut" placeholder="PostgreSQL compatible SQL..."></textarea>
+            <textarea id="pgOut" placeholder="Converted PostgreSQL SQL..."></textarea>
         </div>
 
-        <!-- Result Panel -->
+        <!-- Slot 4 -->
         <div class="panel">
             <div class="panel-header">
-                <span>4. Final Java (Structure Preserved)</span>
+                <span>4. Java 21 Text Block (Final Result)</span>
                 <button class="btn btn-ghost" onclick="copy('finalRes')">Copy</button>
             </div>
-            <textarea id="finalRes" readonly placeholder="Result code with original structure preserved..."></textarea>
+            <textarea id="finalRes" readonly placeholder="Result code with original lines as -- comments..."></textarea>
         </div>
     </div>
 
@@ -245,28 +218,38 @@
     <script src="oracle_to_pgsql_v1.js"></script>
     <script>
         const $ = id => document.getElementById(id);
+        let javaSourceCache = "";
 
-        // --- UI Logic ---
+        // Slot 1 -> Slot 2 (Auto Extraction)
         $('javaIn').addEventListener('input', () => {
             const val = $('javaIn').value;
+            javaSourceCache = val; // Store in cache
+
             if (!val) {
                 $('oracleOut').value = '';
+                $('cacheStatus').innerText = 'Waiting for input...';
                 return;
             }
+
+            $('cacheStatus').innerText = 'Cached (' + val.split('\n').length + ' lines)';
             $('oracleOut').value = OracleToPG.extract(val);
         });
 
         function convert() {
-            const ora = $('oracleOut').value;
-            const javaIn = $('javaIn').value;
-            if (!ora) return;
+            const cleanOracle = $('oracleOut').value;
+            if (!cleanOracle) {
+                alert("Extraction failed or empty SQL in Slot 2.");
+                return;
+            }
 
-            const format = $('dateFormat').value;
-            const pg = OracleToPG.transform(ora, format);
-            $('pgOut').value = pg;
+            // Slot 2 -> Slot 3 (Transformation)
+            const pgSql = OracleToPG.transform(cleanOracle);
+            $('pgOut').value = pgSql;
 
-            // Use smartReplace to keep the original Java structure (comments, etc.)
-            $('finalRes').value = OracleToPG.smartReplace(javaIn, pg);
+            // Slot 1 + Slot 3 -> Slot 4 (Restoration)
+            if (javaSourceCache) {
+                $('finalRes').value = OracleToPG.restoreAsTextBlock(javaSourceCache, pgSql);
+            }
         }
 
         function copy(id) {
@@ -276,15 +259,15 @@
             showNotif();
         }
 
-        function copyResult() {
-            copy('finalRes');
-        }
+        function copyResult() { copy('finalRes'); }
 
         function clearAll() {
             $('javaIn').value = '';
             $('oracleOut').value = '';
             $('pgOut').value = '';
             $('finalRes').value = '';
+            javaSourceCache = "";
+            $('cacheStatus').innerText = 'Waiting for input...';
         }
 
         function showNotif() {
@@ -292,7 +275,6 @@
             n.classList.add('show');
             setTimeout(() => n.classList.remove('show'), 2000);
         }
-
     </script>
 </body>
 
