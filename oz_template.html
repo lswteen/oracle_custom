@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SQL To Java Template Converter v1.9</title>
+    <!-- Optimized for 100% Offline Use: No external dependencies -->
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --glass-bg: rgba(30, 41, 59, 0.7);
+            --accent-color: #8b5cf6;
+            --accent-glow: rgba(139, 92, 246, 0.5);
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --border-color: rgba(255, 255, 255, 0.1);
+            /* System Font Stack for Offline support */
+            --font-sans: 'Outfit', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            --font-mono: 'JetBrains Mono', 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: var(--font-sans);
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            background: radial-gradient(circle at top right, #1e1b4b, #0f172a);
+        }
+
+        header {
+            padding: 1.5rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--border-color);
+            background: rgba(15, 23, 42, 0.8);
+            backdrop-filter: blur(10px);
+            z-index: 10;
+        }
+
+        h1 {
+            font-size: 1.5rem;
+            font-weight: 600;
+            background: linear-gradient(to right, #a78bfa, #f472b6);
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .container {
+            flex: 1;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1.5rem;
+            padding: 1.5rem;
+            height: calc(100vh - 72px);
+        }
+
+        .pane {
+            display: flex;
+            flex-direction: column;
+            background: var(--glass-bg);
+            backdrop-filter: blur(12px);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
+            transition: border-color 0.3s, box-shadow 0.3s;
+        }
+
+        .pane:focus-within {
+            border-color: var(--accent-color);
+            box-shadow: 0 0 20px var(--accent-glow);
+        }
+
+        .pane-header {
+            padding: 0.75rem 1rem;
+            background: rgba(255, 255, 255, 0.05);
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .pane-title {
+            font-size: 0.875rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-secondary);
+        }
+
+        textarea {
+            flex: 1;
+            width: 100%;
+            padding: 1rem;
+            background: transparent;
+            border: none;
+            color: var(--text-primary);
+            font-family: var(--font-mono);
+            font-size: 0.9rem;
+            line-height: 1.6;
+            resize: none;
+            outline: none;
+        }
+
+        textarea::placeholder {
+            color: rgba(148, 163, 184, 0.3);
+        }
+
+        .copy-btn {
+            background: var(--accent-color);
+            color: white;
+            border: none;
+            padding: 0.4rem 1rem;
+            border-radius: 6px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, background 0.2s;
+        }
+
+        .copy-btn:hover {
+            transform: translateY(-1px);
+            background: #7c3aed;
+        }
+
+        .copy-btn:active {
+            transform: translateY(0);
+        }
+
+        .toast {
+            position: fixed;
+            bottom: 2rem;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #10b981;
+            color: white;
+            padding: 0.75rem 1.5rem;
+            border-radius: 99px;
+            font-weight: 600;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.2);
+            opacity: 0;
+            transition: opacity 0.3s, transform 0.3s;
+            pointer-events: none;
+            z-index: 100;
+        }
+
+        .toast.show {
+            opacity: 1;
+            transform: translate(-50%, -1rem);
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                grid-template-columns: 1fr;
+                grid-template-rows: 1fr 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>SQL Template Converter</h1>
+        <div style="font-size: 0.8rem; color: var(--text-secondary);">PostgreSQL to Java String Format v1.9 (Offline Optimized)</div>
+    </header>
+
+    <div class="container">
+        <!-- Input Pane -->
+        <div class="pane">
+            <div class="pane-header">
+                <span class="pane-title">Input SQL (PostgreSQL)</span>
+                <label style="font-size: 0.7rem; color: var(--text-secondary); display: flex; align-items: center; cursor: pointer;">
+                    <input type="checkbox" id="autoAlias" checked style="margin-right: 5px;"> Auto-Alias Fields
+                </label>
+            </div>
+            <textarea id="sqlInput" placeholder="-- Paste PostgreSQL query here..."></textarea>
+        </div>
+
+        <!-- Output Pane -->
+        <div class="pane">
+            <div class="pane-header">
+                <span class="pane-title">Java Template Output</span>
+                <button class="copy-btn" id="copyBtn">COPY CODE</button>
+            </div>
+            <textarea id="sqlOutput" readonly placeholder="Result will appear here..."></textarea>
+        </div>
+    </div>
+
+    <div id="toast" class="toast">Copied to clipboard!</div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            console.log('oz_template.js v1.9 (Embedded) loaded');
+            const sqlInput = document.getElementById('sqlInput');
+            const sqlOutput = document.getElementById('sqlOutput');
+            const copyBtn = document.getElementById('copyBtn');
+            const toast = document.getElementById('toast');
+            const autoAliasCheckbox = document.getElementById('autoAlias');
+
+            const keywords = ['SELECT', 'FROM', 'WHERE', 'GROUP', 'ORDER', 'HAVING', 'LIMIT', 'JOIN', 'LEFT', 'RIGHT', 'INNER', 'OUTER', 'ON', 'USING', 'WITH', 'UNION', 'ALL', 'VALUES', 'INSERT', 'UPDATE', 'DELETE', 'SET', 'INTO', 'CASE', 'WHEN', 'THEN', 'ELSE', 'END', 'AND', 'OR', 'IN', 'BETWEEN', 'NOT', 'IS', 'NULL'];
+            const functionStartKeywords = ['COALESCE', 'NVL', 'DECODE', 'SUBSTR', 'CAST', 'CONVERT', 'SUM', 'COUNT', 'AVG', 'MAX', 'MIN', 'JSON_BUILD_OBJECT', 'JSONB_BUILD_OBJECT', 'ARRAY_AGG', 'JSONB_AGG'];
+
+            const analyzeLine = (line, wasInside, isNowOutside) => {
+                const trimmed = line.trim();
+                const autoAlias = autoAliasCheckbox && autoAliasCheckbox.checked;
+
+                if (!trimmed || !autoAlias) {
+                    return { type: 'original', content: line.trimEnd() };
+                }
+
+                // 1. Keyword check (Structural/Internal/Functions) - Ignore leading comma
+                const cleanTrimmed = trimmed.replace(/^,/, '').trim();
+                const firstWordMatch = cleanTrimmed.split(/[\s(]/)[0].toUpperCase();
+                
+                const isKeywordLine = (keywords.includes(firstWordMatch) || functionStartKeywords.includes(firstWordMatch)) && !/\s+AS\s+/i.test(trimmed);
+                
+                // 2. Multi-line continuation check
+                const isContinuation = wasInside && !isNowOutside && !/\s+AS\s+/i.test(trimmed);
+
+                if (isKeywordLine || isContinuation) {
+                    return { type: 'original', content: line.trimEnd() };
+                }
+
+                // 3. Field Extraction
+                const match = line.match(/^(\s*)(,)?\s*(.*?)\s*(,)?\s*$/);
+                if (!match) return { type: 'original', content: line.trimEnd() };
+
+                const indent = match[1];
+                const leadingComma = match[2] || '';
+                let content = match[3];
+                const trailingComma = match[4] || '';
+
+                let fieldPart = content;
+                let finalAlias = '';
+
+                // Check if already has AS
+                const asMatch = content.match(/^(.*?)\s+AS\s+(.*)$/i);
+                if (asMatch) {
+                    fieldPart = asMatch[1];
+                    finalAlias = asMatch[2].replace(/[\"\\\s]/g, '').toUpperCase();
+                } else if (isNowOutside) {
+                    finalAlias = 'TEMP';
+                } else if (!wasInside) {
+                    const fieldParts = fieldPart.split('.');
+                    const lastPart = fieldParts[fieldParts.length - 1];
+                    const base = lastPart.replace(/[()\[\]\s]/g, '').trim();
+                    if (base && base !== '*' && !/^[0-9]+$/.test(base)) {
+                        finalAlias = base.toUpperCase();
+                    } else if (base === '*') {
+                        finalAlias = 'ALL';
+                    }
+                }
+
+                if (finalAlias) {
+                    return {
+                        type: 'alias',
+                        indent: indent,
+                        leadingComma: leadingComma,
+                        fieldPart: fieldPart,
+                        alias: finalAlias,
+                        trailingComma: trailingComma,
+                        prefix: `${indent}${leadingComma}${fieldPart}`
+                    };
+                }
+
+                return { type: 'original', content: line.trimEnd() };
+            };
+
+            const convertSQL = () => {
+                const input = sqlInput.value;
+                if (!input.trim()) {
+                    sqlOutput.value = '';
+                    return;
+                }
+
+                const lines = input.split('\n');
+                let openBrackets = 0;
+                const analyzedLines = [];
+                let maxPrefixLength = 0;
+
+                lines.forEach((line) => {
+                    const trimmed = line.trim();
+                    const wasInside = openBrackets > 0;
+                    
+                    const openInLine = (trimmed.match(/[\(\[]/g) || []).length;
+                    const closeInLine = (trimmed.match(/[\)\]]/g) || []).length;
+                    openBrackets += (openInLine - closeInLine);
+                    if (openBrackets < 0) openBrackets = 0;
+
+                    const isNowOutside = wasInside && openBrackets === 0;
+                    const analyzed = analyzeLine(line, wasInside, isNowOutside);
+                    
+                    if (analyzed.type === 'alias') {
+                        maxPrefixLength = Math.max(maxPrefixLength, analyzed.prefix.length);
+                    }
+                    analyzedLines.push(analyzed);
+                });
+
+                let result = '';
+                analyzedLines.forEach((analyzed, index) => {
+                    let processed = '';
+                    if (analyzed.type === 'alias') {
+                        const paddedPrefix = analyzed.prefix.padEnd(maxPrefixLength + 2);
+                        processed = `${paddedPrefix}AS \\\"${analyzed.alias}\\\"${analyzed.trailingComma}`;
+                    } else {
+                        processed = analyzed.content;
+                    }
+                    
+                    if (index === 0) {
+                        result += `sql = " ${processed}  \\n"\n`;
+                    } else {
+                        result += `+ " ${processed}  \\n"\n`;
+                    }
+                });
+
+                if (lines.length > 0) {
+                    result += ';\n';
+                }
+
+                sqlOutput.value = result;
+            };
+
+            sqlInput.addEventListener('input', convertSQL);
+            if (autoAliasCheckbox) {
+                autoAliasCheckbox.addEventListener('change', convertSQL);
+            }
+
+            copyBtn.addEventListener('click', () => {
+                if (!sqlOutput.value) return;
+                
+                navigator.clipboard.writeText(sqlOutput.value).then(() => {
+                    toast.classList.add('show');
+                    setTimeout(() => {
+                        toast.classList.remove('show');
+                    }, 2000);
+                });
+            });
+
+            sqlInput.focus();
+        });
+    </script>
+</body>
+</html>
