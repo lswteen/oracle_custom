@@ -215,7 +215,7 @@
 
     <div id="notif" class="notif">Copied to clipboard!</div>
 
-    <script src="oracle_to_pgsql_v1.js"></script>
+    <script src="oracle_to_pgsql.js"></script>
     <script>
         const $ = id => document.getElementById(id);
         let javaSourceCache = "";
@@ -243,7 +243,7 @@
             }
 
             // Slot 2 -> Slot 3 (Transformation)
-            const pgSql = OracleToPG.transform(cleanOracle);
+            const pgSql = OracleToPG.format(OracleToPG.transform(cleanOracle));
             $('pgOut').value = pgSql;
 
             // Slot 1 + Slot 3 -> Slot 4 (Restoration)
